@@ -293,6 +293,10 @@ export function toCSV(solution, profile, options) {
   const metadata = [
     ["Round", profile.name], ["Round ID", profile.id], ["Weapon", options.weapon?.name ?? "Manual"],
     ["Weapon hash ID", options.weapon?.hashId ?? ""], ["Chamber / barrel", options.chamber?.name ?? "Manual"],
+    ["Optic", options.optic?.name ?? "Manual"], ["Optic attachment ID", options.optic?.attachmentId ?? ""],
+    ["Optic view", options.optic?.componentClass ?? ""], ["Optic direct mount", options.opticMount?.name ?? ""],
+    ["Optic rail position percent (50 assumes midpoint)", options.opticRailPosition == null ? "" : options.opticRailPosition * 100],
+    ["Sight geometry", options.sightGeometryMode ?? "User-entered sight geometry"],
     ["Muzzle devices in registration order", (options.attachments ?? []).map((item) => item.id).join("; ")],
     ["Muzzle geometry", options.muzzleGeometryMode ?? "User-entered effective geometry"],
     ["Mounted muzzle forward shift m", options.muzzleForwardShift ?? (options.attachments?.length ? "" : 0)],

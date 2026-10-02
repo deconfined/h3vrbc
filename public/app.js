@@ -1,6 +1,7 @@
 import { MODEL, calculate, muzzleEffects, toCSV } from "./physics.js";
 import { searchWeapons, weaponPreset } from "./weapons.js";
 import { deviceKindLabel, muzzleGeometry, searchMuzzleDevices } from "./muzzle-devices.js";
+import { compatibleOpticMounts, opticGeometry, searchOptics, slidingOpticMount } from "./optics.js";
 import { createFavoriteStore } from "./favorites.js";
 import { createInterfaceStore } from "./interface-state.js";
 
@@ -12,6 +13,7 @@ let caliberById;
 let roundById;
 let weaponById;
 let muzzleDeviceById;
+let opticById;
 let muzzleDevices = [];
 const favoriteStore = createFavoriteStore(document);
 let favorites = [];
@@ -75,6 +77,105 @@ function selectedPreset() {
     : null;
 }
 
+function selectedOptic() {
+  return opticById.get($("optic").value);
+}
+
+function selectedOpticMount() {
+  return $("optic-mount").value === "" ? null
+    : selectedWeapon()?.sightMounts?.[Number($("optic-mount").value)];
+}
+
+function selectedOpticGeometry() {
+  return opticGeometry(selectedWeapon(), selectedPreset()?.chamber, selectedOptic(), selectedOpticMount(),
+    $("optic-rail-position").valueAsNumber / 100);
+}
+
+function usesOpticGeometry(geometry) {
+  return !geometry.reason && Number.isFinite($("sight-height").valueAsNumber)
+    && Number.isFinite($("sight-setback").valueAsNumber)
+    && Math.abs($("sight-height").valueAsNumber / 100 - geometry.sightHeight) < 1e-10
+    && Math.abs($("sight-setback").valueAsNumber / 100 - geometry.sightSetback) < 1e-10;
+}
+
+function filterOptics() {
+  const previous = $("optic").value;
+  const matches = searchOptics(data.optics ?? [], $("optic-search").value);
+  const selected = opticById.get(previous);
+  const pinned = selected && !matches.some((item) => item.id === previous);
+  const label = (item) => `${item.name} · ${item.kind === "scope" ? "PIP scope" : "Reflex"} · ${item.mountTypeName}`;
+  $("optic").replaceChildren(option("", "Manual sight geometry"),
+    ...(pinned ? [option(selected.id, `Selected: ${label(selected)}`)] : []),
+    ...matches.map((item) => option(item.id, label(item))));
+  $("optic").value = previous;
+  $("optic-results").textContent = data.optics?.length
+    ? `${matches.length} matching sight view${matches.length === 1 ? "" : "s"}.${pinned ? " Current selection kept outside the search." : ""}`
+    : "No extracted optic presets. Regenerate the dataset to include scope and reflex geometry.";
+}
+
+function showOpticNote() {
+  const optic = selectedOptic();
+  $("restore-optic").hidden = !optic;
+  $("optic-zero-distances").replaceChildren(...(optic?.zeroDistances ?? [])
+    .filter((distance) => distance > 0).map((distance) => option(distance, `${distance} m`)));
+  if (!optic) {
+    $("optic-note").textContent = "Manual sight geometry; current values remain editable. Choose an optic and a direct weapon mount to fill stock defaults.";
+    return;
+  }
+  const geometry = selectedOpticGeometry();
+  const custom = !geometry.reason && !usesOpticGeometry(geometry);
+  const mount = selectedOpticMount();
+  const rail = slidingOpticMount(mount)
+    ? ` Rail position ${fmt($("optic-rail-position").valueAsNumber, 1)}%; 50% assumes the midpoint, not a measured live pose.` : "";
+  const zero = optic.defaultZeroRange > 0
+    ? ` Authored default zero setting: ${optic.defaultZeroRange} m.` : " No positive authored zero setting; the current range input is retained.";
+  $("optic-note").textContent = `${geometry.reason ? `${geometry.reason} Enter sight height/setback manually if appropriate for the centered model.`
+    : custom ? "Manual sight geometry overrides; restore to reapply optic defaults."
+      : `Stock direct-mount defaults: height ${fmt(geometry.sightHeight * 100, 3)} cm; setback ${fmt(geometry.sightSetback * 100, 3)} cm from the bare muzzle.`}
+    ${rail}${zero} ${optic.zeroModel === "unadjusted" ? "This PIP optic has no base zero adjustment." : ""} Optical origin: ${optic.originRule ?? "unavailable"}. Source: ${optic.source.bundle}/${optic.source.assetName}. Forward-facing stock poses are not live animation measurements.`;
+}
+
+function showOpticMountControls() {
+  $("optic-mount-group").hidden = !selectedOptic();
+  const sliding = slidingOpticMount(selectedOpticMount());
+  $("optic-rail-group").hidden = !sliding;
+  $("optic-rail-position").disabled = !sliding;
+}
+
+function applyOpticGeometry() {
+  if (selectedOptic()) {
+    const geometry = selectedOpticGeometry();
+    $("sight-height").value = geometry.sightHeight === null ? "" : geometry.sightHeight * 100;
+    $("sight-setback").value = geometry.sightSetback === null ? "" : geometry.sightSetback * 100;
+    if (geometry.reason) revealField($("sight-height"));
+  }
+  showOpticNote();
+}
+
+function refreshOpticMounts(reset = true) {
+  const previous = $("optic-mount").value;
+  const matches = compatibleOpticMounts(selectedWeapon(), selectedOptic());
+  $("optic-mount").replaceChildren(option("", matches.length ? "Select a matching direct mount" : "No matching direct mount / manual geometry"),
+    ...matches.map(({ mount, index }) => option(index, `${mount.name} · ${mount.typeName} · ${slidingOpticMount(mount) ? "Sliding rail" : "Fixed point"}`)));
+  $("optic-mount").value = !reset && matches.some(({ index }) => String(index) === previous)
+    ? previous : matches.length === 1 ? String(matches[0].index) : "";
+  if (reset) $("optic-rail-position").value = "50";
+  showOpticMountControls();
+  if (reset) applyOpticGeometry();
+  else showOpticNote();
+}
+
+function applyOpticDefaults() {
+  const optic = selectedOptic();
+  if (optic) {
+    $("zero-model").value = optic.zeroModel;
+    if (optic.defaultZeroRange > 0) $("zero-range").value = optic.defaultZeroRange;
+  }
+  applyOpticGeometry();
+  showRoundFacts();
+  invalidate();
+}
+
 function captureInterface() {
   return {
     values: Object.fromEntries([...form.querySelectorAll("input[id], select[id]")]
@@ -130,6 +231,7 @@ function interfaceProblem(state) {
   const weapon = weaponById.get(values.weapon);
   const chamberIndex = Number(values["weapon-chamber"]);
   const round = roundById.get(values.ammunition);
+  const optic = opticById.get(values.optic);
   if (typeof values.weapon !== "string" || typeof values.ammunition !== "string"
     || typeof values["weapon-chamber"] !== "string"
     || values.weapon && !weapon
@@ -138,6 +240,9 @@ function interfaceProblem(state) {
     || values.ammunition && (!round || weapon && round.caliberId !== weaponPreset(weapon, chamberIndex).caliberId)
     || state.attachmentIds.some((id) => !muzzleDeviceById.has(id)))
     return "The remembered setup could not be restored: a weapon, chamber, round or muzzle device is no longer available.";
+  if (values.optic && (!optic || values["optic-mount"] && !compatibleOpticMounts(weapon, optic)
+    .some(({ index }) => String(index) === values["optic-mount"])))
+    return "The remembered setup could not be restored: an optic or direct weapon mount is no longer available.";
   for (const id of ["scene", "gravity", "zero-model", "muzzle-geometry-mode", "muzzle-kind"]) {
     if (![...$(id).options].some((item) => item.value === values[id]))
       return "The remembered setup could not be restored: a selected setting is no longer available.";
@@ -169,6 +274,10 @@ function restoreInterface(state) {
   muzzleDevices = state.attachmentIds.map((id) => muzzleDeviceById.get(id));
   $("muzzle-geometry-mode").value = values["muzzle-geometry-mode"];
   refreshMuzzleSetup(true);
+  $("optic-search").value = "";
+  filterOptics();
+  $("optic").value = values.optic ?? "";
+  refreshOpticMounts(false);
   for (const field of form.querySelectorAll("input[id], select[id]")) {
     if (field.id === "favorites-consent" || !Object.hasOwn(values, field.id)) continue;
     if (field.type === "checkbox") field.checked = values[field.id];
@@ -178,6 +287,9 @@ function restoreInterface(state) {
   filterRounds(true);
   refreshMuzzleSetup();
   filterMuzzleDevices(values["muzzle-device"]);
+  filterOptics();
+  showOpticMountControls();
+  showOpticNote();
   renderFavorites(values["favorite-select"]);
   showRoundFacts();
   showSimulationNote();
@@ -312,6 +424,7 @@ function loadFavorite() {
   applyWeaponPreset();
   filterRounds();
   $("ammunition").value = favorite.roundId;
+  refreshOpticMounts();
   muzzleDevices = favorite.attachmentIds.map((id) => muzzleDeviceById.get(id));
   refreshMuzzleSetup(true);
   showRoundFacts();
@@ -539,7 +652,7 @@ function showWeaponNote() {
     ? `Source: ${weapon.source.bundle}/${weapon.source.assetName}.`
     : "No stock firearm configuration available.";
   $("weapon-note").textContent =
-    `${custom ? "Custom overrides; restore to reapply loadout-aware weapon values." : "Stock prefab values; editable in Manual overrides."} ${preset.warnings.join(" ")} ${source} Sight geometry is not auto-filled.${manualMuzzleGeometry() ? " Measured muzzle geometry is preserved when restoring multipliers." : ""}`;
+    `${custom ? "Custom overrides; restore to reapply loadout-aware weapon values." : "Stock prefab values; editable in Manual overrides."} ${preset.warnings.join(" ")} ${source} Sight geometry uses the selected optic/direct mount or manual inputs.${manualMuzzleGeometry() ? " Measured muzzle geometry is preserved when restoring multipliers." : ""}`;
 }
 
 function applyWeaponPreset() {
@@ -573,6 +686,7 @@ function changeWeapon() {
   $("ammo-search").value = "";
   filterRounds();
   refreshMuzzleSetup(true);
+  refreshOpticMounts();
 }
 
 function showRoundFacts() {
@@ -649,6 +763,8 @@ function filterRounds(preserveSelected = false) {
 function readOptions() {
   const values = new FormData(form);
   const scene = data.scenes.find((item) => item.file === $("scene").value);
+  const sightGeometry = selectedOpticGeometry();
+  const railPosition = $("optic-rail-position").valueAsNumber / 100;
   let geometry = { forwardShift: 0, upShift: 0 };
   if (muzzleDevices.length) {
     geometry = selectedMuzzleGeometry();
@@ -663,6 +779,11 @@ function readOptions() {
   }
   return {
     weapon: selectedWeapon(),
+    optic: selectedOptic(),
+    opticMount: selectedOpticMount(),
+    opticRailPosition: slidingOpticMount(selectedOpticMount()) && Number.isFinite(railPosition) ? railPosition : null,
+    sightGeometryMode: selectedOptic() && usesOpticGeometry(sightGeometry)
+      ? "Forward-facing stock direct mount (rail position assumed unless measured)" : "Manual sight geometry",
     chamber: selectedPreset()?.chamber,
     attachments: [...muzzleDevices],
     muzzleGeometryMode: !muzzleDevices.length ? "Bare weapon" : manualMuzzleGeometry() ? "Measured centered/bore-aligned muzzle" : "Stock inner-to-outer mounts",
@@ -907,6 +1028,8 @@ async function start() {
   roundById = new Map(data.rounds.map((item) => [item.id, item]));
   weaponById = new Map(data.weapons.map((item) => [item.id, item]));
   muzzleDeviceById = new Map((data.muzzleDevices ?? []).map((item) => [item.id, item]));
+  opticById = new Map((data.optics ?? []).map((item) => [item.id, item]));
+  filterOptics();
   filterWeapons();
   changeWeapon();
   $("ammunition").value = "556x45mmCartridgeFMJ";
@@ -953,7 +1076,9 @@ async function start() {
   form.addEventListener("submit", runCalculation);
   form.addEventListener("input", (event) => {
     if (event.target.closest("#favorites-section")) return;
-    if (["ammo-search", "weapon-search", "muzzle-search", "muzzle-kind", "muzzle-device"].includes(event.target.id)) return;
+    if (["ammo-search", "weapon-search", "muzzle-search", "muzzle-kind", "muzzle-device", "optic-search"].includes(event.target.id)) return;
+    if (event.target.id === "optic-rail-position") applyOpticGeometry();
+    if (["sight-height", "sight-setback"].includes(event.target.id)) showOpticNote();
     if (event.target.id === "shot-charge") {
       $("velocity-multiplier").value = selectedPreset()?.velocityMultiplier ?? "";
     }
@@ -966,7 +1091,7 @@ async function start() {
   });
   form.addEventListener("change", (event) => {
     if (event.target.closest("#favorites-section")) return;
-    if (["weapon-search", "muzzle-search", "muzzle-kind", "muzzle-device"].includes(event.target.id)) return;
+    if (["weapon-search", "muzzle-search", "muzzle-kind", "muzzle-device", "optic-search"].includes(event.target.id)) return;
     if (event.target.id === "weapon") {
       changeWeapon();
     } else if (event.target.id === "weapon-chamber") {
@@ -974,6 +1099,18 @@ async function start() {
       $("ammo-search").value = "";
       filterRounds();
       refreshMuzzleSetup(true);
+      applyOpticGeometry();
+    } else if (event.target.id === "optic") {
+      refreshOpticMounts();
+      applyOpticDefaults();
+    } else if (event.target.id === "optic-mount") {
+      $("optic-rail-position").value = "50";
+      showOpticMountControls();
+      applyOpticGeometry();
+      invalidate();
+    } else if (event.target.id === "optic-rail-position") {
+      applyOpticGeometry();
+      invalidate();
     } else if (event.target.id === "muzzle-geometry-mode") {
       refreshMuzzleSetup(true);
       invalidate();
@@ -990,6 +1127,8 @@ async function start() {
   });
   $("ammo-search").addEventListener("input", filterRounds);
   $("weapon-search").addEventListener("input", filterWeapons);
+  $("optic-search").addEventListener("input", filterOptics);
+  $("restore-optic").addEventListener("click", applyOpticDefaults);
   $("restore-weapon").addEventListener("click", applyWeaponPreset);
   $("muzzle-search").addEventListener("input", filterMuzzleDevices);
   $("muzzle-kind").addEventListener("change", filterMuzzleDevices);

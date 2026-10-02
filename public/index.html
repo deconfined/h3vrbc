@@ -214,6 +214,25 @@
               <details class="setup-section" id="sight-section" open>
                 <summary><span class="setup-step">04</span>Sight &amp; range</summary>
                 <div class="setup-section-content">
+                  <label for="optic-search">Find scope / reflex attachment</label>
+                  <input id="optic-search" type="search" placeholder="Name, ID or mount type" autocomplete="off" />
+                  <label for="optic">Optic preset</label>
+                  <select id="optic" aria-describedby="optic-note">
+                    <option value="">Manual sight geometry</option>
+                  </select>
+                  <p class="field-note" id="optic-results" role="status"></p>
+                  <div id="optic-mount-group" hidden>
+                    <label for="optic-mount">Direct weapon mount</label>
+                    <select id="optic-mount"></select>
+                    <div id="optic-rail-group" hidden>
+                      <label for="optic-rail-position">Position along rail <span>%</span></label>
+                      <input id="optic-rail-position" type="number" value="50" min="0" max="100" step="any" disabled />
+                      <p class="field-note">Defaults to the assumed midpoint (50%). 0% is the rear endpoint; 100% is the front. Adjust to match your actual mounting position.</p>
+                    </div>
+                    <p class="field-note">Forward-facing, uncanted direct mounting only. Matching mount types does not check collisions or occupied slots. Adapters, risers and reversed mounting require manual geometry.</p>
+                  </div>
+                  <p class="field-note" id="optic-note" role="status"></p>
+                  <button id="restore-optic" class="secondary" type="button" hidden>Restore optic defaults</button>
                   <label for="zero-model">Sight zeroing rule</label>
                   <select id="zero-model" name="zeroModel">
                     <option value="game">Modern PIP scope / reflex sight</option>
@@ -235,8 +254,10 @@
                         min="1"
                         max="5000"
                         step="1"
+                        list="optic-zero-distances"
                         required
                       />
+                      <datalist id="optic-zero-distances"></datalist>
                     </div>
                     <div>
                       <label for="sight-height">Bare-muzzle sight height <span>cm</span></label>
@@ -247,7 +268,7 @@
                         value="5"
                         min="0"
                         max="100"
-                        step="0.1"
+                        step="any"
                         required
                       />
                     </div>
@@ -260,10 +281,10 @@
                     value="0"
                     min="-100"
                     max="200"
-                    step="0.1"
+                    step="any"
                     required
                   />
-                  <p class="field-note">Measure the optic relative to the bare weapon muzzle. Selected devices add their forward shift to setback and subtract their up shift from sight height automatically. No device: these are the effective values.</p>
+                  <p class="field-note">Values describe the optical origin relative to the bare weapon muzzle and remain editable. Selected devices add their forward shift to setback and subtract their up shift from sight height automatically. No device: these are the effective values.</p>
                   <label for="firing-angle">Firing angle <span>°</span></label>
                   <input
                     id="firing-angle"

@@ -33,6 +33,18 @@ def digest(path):
         return hashlib.file_digest(file, "sha256").hexdigest()
 
 
+def fix_string_arrays(node):
+    # TTGen 0.0.10 labels List<string>/string[] as "string", causing the
+    # reader to consume a string instead of an array (optic display names).
+    # A normal string's Array contains chars and must remain untouched.
+    if (node.m_Type == "string" and node.m_Children
+            and node.m_Children[0].m_Type == "Array"
+            and node.m_Children[0].m_Children[1].m_Type == "string"):
+        node.m_Type = "vector"
+    for child in node.m_Children:
+        fix_string_arrays(child)
+
+
 class Assets:
     def __init__(self, game, version):
         self.generator = TypeTreeGenerator(version)
@@ -61,6 +73,7 @@ class Assets:
         script = obj.parse_monobehaviour_head().m_Script.deref_parse_as_object()
         fullname = f"{script.m_Namespace}.{script.m_ClassName}" if script.m_Namespace else script.m_ClassName
         node = self.generator.get_nodes_up(script.m_AssemblyName, fullname)
+        fix_string_arrays(node)
         # TTGen 0.0.10's generated Unity 5 base header omits m_Enabled padding.
         # Use the engine-version header flags; custom payload retains its own tree.
         builtin = get_typetree_node(ClassIDType.MonoBehaviour, obj.version)
@@ -157,6 +170,8 @@ def extract(root, output):
     types, families = ancestry(pe)
     shot_cache = {}
     muzzle_devices = []
+    optics = []
+    mount_names = enum_values(pe, "FVRFireArmAttachementMountType")
     accuracy_names = enum_values(pe, "FVRFireArmMechanicalAccuracyClass")
     chart = assets.full(deref(am_obj, am["AccuracyChart"]))
     accuracy_classes = [{"id": item["Class"], "name": accuracy_names[item["Class"]],
@@ -184,6 +199,7 @@ def extract(root, output):
                         prefab_names[(root_obj.assets_file.name, root_obj.path_id)] = Path(asset_path).stem
                         root_objects[(root_obj.assets_file.name, root_obj.path_id)] = root_obj
         prefab_reader = Prefabs(assets, pe, types, families, shot_cache)
+        prefab_reader.mount_names = mount_names
         for key, root_obj in root_objects.items():
             asset_name = prefab_names[key]
             wrapper = catalog_by_asset.get((bundle_name, asset_name.casefold()))
@@ -204,6 +220,12 @@ def extract(root, output):
                               **prefab_reader.device(component, fields, classname)}
                     device["source"].update({"bundle": bundle_name, "assetName": asset_name})
                     muzzle_devices.append(device)
+            if wrapper["Category"] == 5:
+                for optic in prefab_reader.optics(root_obj):
+                    optic.update({"id": f"{wrapper['ItemID']}:{optic['source']['pathId']}",
+                                  "attachmentId": wrapper["ItemID"], "name": wrapper["DisplayName"]})
+                    optic["source"].update({"bundle": bundle_name, "assetName": asset_name})
+                    optics.append(optic)
         for obj in env.objects:
             if assets.classname(obj) != "FVRFireArmRound":
                 continue
@@ -277,13 +299,14 @@ def extract(root, output):
         "calibers": sorted(calibers, key=lambda item: item["name"].casefold()),
         "weapons": sorted(weapons.values(), key=lambda item: item["name"].casefold()),
         "muzzleDevices": sorted(muzzle_devices, key=lambda item: item["name"].casefold()),
+        "optics": sorted(optics, key=lambda item: (item["name"].casefold(), item["componentClass"])),
         "scenes": scenes,
         "rounds": sorted(rounds, key=lambda item: item["name"].casefold()),
         "excluded": sorted(excluded, key=lambda item: item["name"].casefold()),
     }
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(dataset, separators=(",", ":"), allow_nan=False) + "\n")
-    print(f"Extracted {len(rounds)} supported rounds, {len(calibers)} calibers, {len(weapons)} weapon presets, {len(muzzle_devices)} muzzle devices, {len(scenes)} scene settings.")
+    print(f"Extracted {len(rounds)} supported rounds, {len(calibers)} calibers, {len(weapons)} weapon presets, {len(muzzle_devices)} muzzle devices, {len(optics)} optic views, {len(scenes)} scene settings.")
     print(f"{len(excluded)} unavailable rounds have explicit reasons. Wrote {output} ({output.stat().st_size:,} bytes).")
 
 

@@ -96,7 +96,7 @@ The left menu has independently expandable sections:
 1. **Simulation:** choose a scene, projectile limit, and gravity mode. Timing and world-height inputs are available under the advanced controls.
 2. **Weapon & ammunition:** search for a weapon and supported round. Select a chamber/barrel for multi-chamber weapons and set charge for supported sticky shots. Weapon presets fill verified geometry and firing multipliers.
 3. **Muzzle devices:** search suppressors, brakes, extenders, and other devices, then add them to the loadout. Match the game's registration order using Earlier/Later controls. Stock geometry treats this as an inner-to-outer mount chain.
-4. **Sight & range:** choose the optic zeroing rule, sight geometry, firing angle, target range, and range-card interval. Sight height and setback describe the **bare weapon muzzle**; device geometry supplies the effective adjustment.
+4. **Sight & range:** choose an optic preset and a matching direct weapon mount to fill sight geometry and the authored default zero setting, or enter values manually. Sliding rails default to an **assumed midpoint (50%)**, adjustable from rear (0%) to front (100%). Sight height and setback describe the **bare weapon muzzle**; device geometry supplies the effective adjustment. Set firing angle, target range, and range-card interval.
 5. **Manual overrides:** supply missing values or adjust geometry and velocity multipliers for your setup.
 
 Click **Calculate solution** after changing the firing setup. Changes invalidate the previous solution and CSV export. Browsing weapon or device candidates and opening or closing sections preserve the current calculation.
@@ -105,6 +105,18 @@ The chart shows vertical trajectory. The target summary, range card, and **Expor
 
 For unverified mounting, choose measured muzzle geometry, enter the mounted distance and forward/up shifts, and confirm them before calculating. Selecting a device does not establish physical compatibility with the weapon.
 
+### Optic defaults
+
+The extractor includes **81 optical attachments / 83 sight views** (57 PIP scope views and 26 reflex views), plus direct weapon-mount geometry. Combo scopes expose their scope and reflex views separately. Regenerate older datasets with `npm run extract` to populate the selector.
+
+Choose a weapon, optic and direct mount. A unique matching mount is selected automatically; multiple matching mounts require a choice. Rail position starts at 50%, explicitly assuming the midpoint rather than a measured in-game pose. Changing the weapon, chamber, optic, mount or rail position recalculates the default bare-muzzle height/setback. **Restore optic defaults** restores geometry and the authored zero rule/setting while keeping the chosen rail position. Geometry and zero inputs remain editable, and searching preserves the selected optic and current calculation.
+
+PIP geometry uses the game's optical origin, including its clamped rear-lens camera offset, rather than guessing from the mesh or lens. Reflex geometry uses the first reticle renderer's transform. PIP optics with disabled base zero select **No base zero adjustment** without forcing the required range input to zero. Positive authored zero distances are suggested in the zero-setting input.
+
+Defaults assume forward-facing, uncanted, centered **direct** mounting with no dial trim. Unsupported/off-axis geometry, missing direct mounts, custom muzzle references and extendable telescope geometry leave height/setback blank with an explanation. Adapters, risers, magnifier/clip-on combinations, occupied mounts, physical collisions and live animation poses are not composed or verified. Manual geometry remains available where the centered model is appropriate.
+
+For example, **M4 Carbine + Scope ACOG 4×32** at the top rail midpoint gives approximately **6.989 cm sight height** and **56.565 cm optic setback**, with a default **100 m** optic setting. These are source-derived defaults, not real-firearm measurements or a live-VR validation. See [optic extraction and geometry notes](docs/optics.md).
+
 ## Cookies, favorites, and refresh persistence
 
 Storage is **off by default**. In **Saved setups & preferences**, explicitly enable **Allow cookies to remember my interface and favorite setups** to use browser persistence. The app uses no account or external API.
@@ -112,7 +124,7 @@ Storage is **off by default**. In **Saved setups & preferences**, explicitly ena
 With storage enabled:
 
 - **Named favorites** save the weapon, selected chamber, ordered muzzle devices, and round. Sight, range, and manual overrides are outside the named favorite. You can save, load, rename an identical combination by saving it again, or delete a favorite.
-- **The active interface** is saved automatically, including calculation inputs, manual overrides and geometry confirmation, searches and filters, favorite controls, open sections, and page/sidebar/range-table scroll positions.
+- **The active interface** is saved automatically, including calculation inputs, optic/view and direct-mount selections, rail position, manual overrides and geometry confirmation, searches and filters, favorite controls, open sections, and page/sidebar/range-table scroll positions.
 - **Refreshing** restores the interface. A current calculated solution is recomputed from its restored inputs; unfinished edits remain pending until you calculate.
 
 Loading a named favorite reapplies its weapon/loadout configuration and invalidates the current solution. Measured mounting geometry needs fresh verification when loading a favorite. Refreshing the active interface restores its existing measurements and confirmation.
@@ -145,6 +157,7 @@ The JavaScript suite covers physics, weapon/device behavior, UI validation, favo
 | `public/index.html`, `public/style.css`, `public/app.js` | Browser interface and interactions |
 | `public/physics.js` | Projectile model, solutions, and CSV generation |
 | `public/weapons.js`, `public/muzzle-devices.js` | Weapon presets, device search, and mounting geometry |
+| `public/optics.js` | Optic search, direct mount matching, and bare-muzzle sight defaults |
 | `public/favorites.js`, `public/interface-state.js` | Cookie validation and persistence |
 | `tools/extract.py`, `tools/prefabs.py` | Local Unity data extraction and prefab interpretation |
 | `server.mjs` | Static HTTP server |
@@ -154,6 +167,7 @@ Additional model notes:
 
 - [Muzzle-device inventory and mounting rules](docs/muzzle-devices.md)
 - [Horizontal-drift investigation](docs/horizontal-drift.md)
+- [Optic defaults and optical-origin extraction](docs/optics.md)
 
 ## Troubleshooting
 

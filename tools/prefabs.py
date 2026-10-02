@@ -5,6 +5,9 @@ from UnityPy.classes import PPtr
 from dncil.cil.body import CilMethodBody
 from dncil.cil.body.reader import CilMethodBodyReaderBytes
 
+OPTIC_MOUNT_NAMES = {"Picatinny", "Russian", "RMR", "M16HandleMount", "MAS4956Scope",
+                     "SVTScope", "M1GarandScope", "M1CarbineScope", "MP5RailMount", "PythonScopeMount"}
+
 
 def ancestry(pe):
     types = {str(item.TypeName): item for item in pe.net.mdtables.TypeDef if str(item.TypeNamespace) == "FistVR"}
@@ -85,22 +88,110 @@ class Prefabs:
         return self.assets.full(wrapper)["ItemID"] if wrapper is not None else None
 
     def muzzle_mounts(self, obj, data):
+        return self.attachment_mounts(obj, data, {2})
+
+    def attachment_mounts(self, obj, data, allowed_types):
         result = []
         for pointer in data.get("AttachmentMounts", []):
             mount = self.resolve(obj, pointer)
             if mount is None:
                 continue
             fields = self.assets.full(mount)
-            # FVRFireArmAttachementMountType.Suppressor is the shared muzzle mount.
-            if fields["Type"] != 2:
+            if fields["Type"] not in allowed_types:
                 continue
             front = self.resolve(mount, fields["Point_Front"])
             rear = self.resolve(mount, fields["Point_Rear"])
             parent = self.resolve(mount, fields["Parent"])
             result.append({"name": self.game_name(mount), "front": self.pose(front)["position"],
-                           "rear": self.pose(rear)["position"], "pose": self.pose(mount),
-                           "parentPose": self.pose(parent) if parent is not None else None, "parentToThis": bool(fields["ParentToThis"]),
-                           "scaleModifier": fields["ScaleModifier"], "source": self.source(mount)})
+                            "rear": self.pose(rear)["position"], "pose": self.pose(mount),
+                            "parentPose": self.pose(parent) if parent is not None else None, "parentToThis": bool(fields["ParentToThis"]),
+                            "type": fields["Type"], "typeName": getattr(self, "mount_names", {}).get(fields["Type"]),
+                            "scaleModifier": fields["ScaleModifier"], "source": self.source(mount)})
+        return result
+
+    def descendants(self, root):
+        pending = [self.transform(root)]
+        while pending:
+            transform = pending.pop()
+            fields = transform.read_typetree()
+            yield from self.components(self.resolve(transform, fields["m_GameObject"]))
+            pending.extend(self.resolve(transform, pointer) for pointer in fields["m_Children"])
+
+    def relative_pose(self, root, pose):
+        matrix = self.matrix(self.transform(root))
+        root_pose = self.pose(root)
+        axes = [[matrix[i][0]/root_pose["scale"][0] for i in range(3)], root_pose["up"], root_pose["forward"]]
+        relative = [pose["position"][i] - root_pose["position"][i] for i in range(3)]
+        return {"position": [sum(relative[i]*axis[i] for i in range(3))/root_pose["scale"][j] for j, axis in enumerate(axes)],
+                "forward": [sum(pose["forward"][i]*axis[i] for i in range(3)) for axis in axes],
+                "up": [sum(pose["up"][i]*axis[i] for i in range(3)) for axis in axes]}
+
+    def optic(self, root, attachment, component, name):
+        data = self.assets.full(component)
+        result = {"componentClass": name, "kind": "scope" if name == "PIPScopeController" else "reflex",
+                  "viewName": self.game_name(component), "rootPose": self.pose(root),
+                  "mountType": attachment["Type"], "mountTypeName": self.mount_names[attachment["Type"]],
+                  "canScaleToMount": bool(attachment["CanScaleToMount"]), "bidirectional": bool(attachment["IsBiDirectional"]),
+                  "zeroDistances": data["ZeroDistanceValues"], "zeroDistanceIndex": data["ZeroDistanceIndex"],
+                  "zeroModel": "game", "source": self.source(component)}
+        values = data["ZeroDistanceValues"]
+        index = data["ZeroDistanceIndex"]
+        fallback = data["FixedBaseZero"] if name == "PIPScopeController" else 10.0  # Verified ReflexSightController ctor.
+        default = values[index] if values and 0 <= index < len(values) else fallback if not values else None
+        result["defaultZeroRange"] = default if default is not None and default > 0 else None
+        if name == "PIPScopeController":
+            result["fixedBaseZero"] = data["FixedBaseZero"]
+            if data["FixedBaseZero"] <= 0:
+                result["zeroModel"] = "unadjusted"
+            scope = self.resolve(component, data["PScope"])
+            fields = self.assets.full(scope)
+            camera = self.resolve(scope, fields["scopeCamTransform"])
+            pose = self.pose(camera)
+            scope_pose = self.pose(scope)
+            # ZeroToWorldPoint's forward-view origin is the camera intersection
+            # plus the clamped rear-lens camera offset, not the renderer/lens.
+            angle = math.degrees(math.acos(max(-1, min(1, sum(a*b for a, b in zip(pose["forward"], scope_pose["forward"]))))))
+            if angle >= 1:
+                result["geometryUnavailable"] = "Angled internal scope camera requires a separately verified optical origin."
+            offset = max(0, min(fields["cameraOffsetRearLens"], fields["frontLensOffset"]))
+            pose = {**pose, "position": [pose["position"][i] + pose["forward"][i]*offset for i in range(3)]}
+            result["cameraOffsetRearLens"] = offset
+            result["originRule"] = "PIP camera intersection + clamped rear-lens offset"
+            magnifications = data["MagnificationValues"]
+            mag_index = data["MagnificationIndex"]
+            result["magnifications"] = magnifications
+            result["defaultMagnification"] = (data["MagnificationOverride"] if data["MagnificationOverride"] > 0 else magnifications[mag_index]) if magnifications and 0 <= mag_index < len(magnifications) else fields["baseMagnification"]
+            result["zeroingMode"] = data["ZeroingMode"]
+        else:
+            renderers = data["ReflexSightRenderers"]
+            if not renderers:
+                result["geometryUnavailable"] = "No serialized reflex renderer optical origin."
+                return result
+            pose = self.pose(self.resolve(component, renderers[0]))
+            result["originRule"] = "First ReflexSightRenderer transform"
+        result["opticalPose"] = self.relative_pose(root, pose)
+        if any(data.get(key, {}).get("m_PathID") for key in ("OverrideMuzzle", "OverrideFireArm")):
+            result["geometryUnavailable"] = "This sight uses a custom firearm/muzzle reference; direct-mount defaults are not verified."
+        if any(data.get(key, 0) for key in ("ScopeElevationMagnitude", "ScopeWindageMagnitude", "ReticleElevationMagnitude", "ReticleWindageMagnitude", "Flipped")):
+            result["geometryUnavailable"] = "Authored dial trim or folded state is outside the centered, zero-trim model."
+        return result
+
+    def optics(self, root):
+        components = list(self.descendants(root))
+        attachment = next((obj for obj in self.components(root) if "FVRFireArmAttachment" in self.families.get(self.assets.classname(obj), [])), None)
+        if attachment is None:
+            return []
+        fields = self.assets.full(attachment)
+        dynamic = any(self.assets.classname(obj) in {"Telescopescope", "Telescopescopev2"} for obj in components)
+        result = []
+        for component in components:
+            name = self.assets.classname(component)
+            if name not in {"PIPScopeController", "ReflexSightController"}:
+                continue
+            optic = self.optic(root, fields, component, name)
+            if dynamic:
+                optic["geometryUnavailable"] = "Extendable telescope geometry depends on its live extension."
+            result.append(optic)
         return result
 
     def shot_rule(self, name, fields):
@@ -136,8 +227,10 @@ class Prefabs:
         return {"kind": "manual", "reason": "No verified call to FVRFireArm.Fire in this component's inheritance chain."}
 
     def weapon(self, obj, data, name):
+        sight_types = {key for key, value in getattr(self, "mount_names", {}).items() if value in OPTIC_MOUNT_NAMES or value.startswith("Scope_")}
         result = {"hashId": self.identity(obj, data), "accuracyClass": data["AccuracyClass"],
                   "componentClass": name, "shotRule": self.shot_rule(name, data), "chambers": [],
+                  "sightMounts": self.attachment_mounts(obj, data, sight_types),
                   "muzzleMounts": self.muzzle_mounts(obj, data), "source": self.source(obj)}
         muzzle = self.resolve(obj, data["MuzzlePos"])
         result["muzzlePose"] = self.pose(muzzle) if muzzle is not None else None
@@ -183,6 +276,7 @@ class Prefabs:
             length = math.dist(position, self.pose(actual_muzzle)["position"]) if actual_muzzle is not None else None
             result["chambers"].append({"name": self.game_name(chamber), "multiplier": fields["ChamberVelocityMultiplier"],
                                        "caliberId": fields["RoundType"], "barrelLength": length, "position": position,
+                                       "muzzlePose": self.pose(actual_muzzle) if actual_muzzle is not None else None,
                                        "source": self.source(chamber)})
         if not result["chambers"]:
             result["presetUnavailable"] = "No serialized chamber found; inspect the live firearm's chamber reference."
