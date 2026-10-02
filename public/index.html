@@ -1,0 +1,573 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#151a1c" />
+    <title>H3VR Ballistic Calculator</title>
+    <link rel="stylesheet" href="style.css" />
+    <script type="module" src="app.js"></script>
+  </head>
+  <body>
+    <header class="masthead">
+      <a class="brand" href="/" aria-label="H3VR Ballistic Calculator home"
+        ><span class="brand-mark">H3</span
+        ><h1>H3VR <strong>BALLISTICS</strong></h1></a
+      >
+      <div class="header-meta">
+        <span class="edition">LOCAL GAME DATA <span class="status-dot"></span></span>
+        <span class="build-tag" id="build-tag" role="status">Reading local data…</span>
+      </div>
+    </header>
+    <main>
+      <div class="notice" id="load-error" role="alert" hidden></div>
+      <div class="workspace" id="workspace" hidden>
+        <aside class="panel setup" aria-label="Calculator settings">
+          <form id="setup-form" class="setup-form">
+            <div class="setup-scroll">
+              <details class="setup-section" id="favorites-section" open>
+                <summary><span class="setup-step" aria-hidden="true">★</span>Saved setups &amp; preferences</summary>
+                <div class="setup-section-content">
+                  <p class="field-note" id="favorites-cookie-note">
+                    Cookies remember your interface and favorite setups on this browser
+                    for up to one year. Storage is off by default. Turning it off
+                    deletes all remembered settings and favorites.
+                  </p>
+                  <label class="checkbox-label" for="favorites-consent">
+                    <input id="favorites-consent" type="checkbox" aria-describedby="favorites-cookie-note" />
+                    <span>Allow cookies to remember my interface and favorite setups</span>
+                  </label>
+                  <fieldset id="favorites-controls" class="favorite-controls" aria-label="Manage favorite setups" hidden disabled>
+                    <p class="field-note">Save a weapon, its muzzle devices in order, and a round. Sight, range and manual overrides are not saved.</p>
+                    <label for="favorite-name">Setup name <span>optional</span></label>
+                    <input id="favorite-name" type="text" maxlength="60" placeholder="Use weapon and round names" autocomplete="off" />
+                    <button id="save-favorite" class="secondary" type="button" disabled>Save current setup</button>
+                    <label for="favorite-select">Saved setups</label>
+                    <select id="favorite-select" aria-describedby="favorite-summary" disabled>
+                      <option value="">Choose a saved setup</option>
+                    </select>
+                    <p class="field-note" id="favorite-summary"></p>
+                    <div class="favorite-actions">
+                      <button id="load-favorite" class="secondary" type="button" disabled>Load setup</button>
+                      <button id="delete-favorite" class="secondary" type="button" disabled>Delete</button>
+                    </div>
+                  </fieldset>
+                  <p class="field-note" id="favorite-status" role="status">Enable cookie storage to save and load favorites.</p>
+                  <p class="field-note" id="interface-status" role="status" hidden></p>
+                </div>
+              </details>
+              <details class="setup-section" id="simulation-section" open>
+                <summary><span class="setup-step">01</span>Simulation</summary>
+                <div class="setup-section-content">
+                  <label for="scene">Game scene preset</label>
+                  <select id="scene" aria-describedby="simulation-note"></select>
+                  <label for="scene-limit">Scene projectile limit <span>m</span></label>
+                  <input
+                    id="scene-limit"
+                    name="sceneLimit"
+                    type="number"
+                    min="0.001"
+                    max="100000"
+                    step="any"
+                    required
+                  />
+                  <label for="gravity">Ballistic gravity mode</label>
+                  <select id="gravity" name="gravity"></select>
+                  <p class="field-note" id="simulation-note" role="status"></p>
+                  <details class="advanced" id="simulation-timing">
+                    <summary>Timing &amp; world height</summary>
+                    <div class="input-pair">
+                      <div>
+                        <label for="fixed-step">Fixed tick <span>ms</span></label>
+                        <input
+                          id="fixed-step"
+                          name="fixedStep"
+                          type="number"
+                          min="0.1"
+                          max="100"
+                          step="any"
+                          required
+                        />
+                      </div>
+                      <div>
+                        <label for="first-step">First fire tick <span>ms</span></label>
+                        <input
+                          id="first-step"
+                          name="firstStep"
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="any"
+                          required
+                        />
+                      </div>
+                    </div>
+                    <label for="world-height">Optic world height <span>m</span></label>
+                    <input
+                      id="world-height"
+                      name="worldHeight"
+                      type="number"
+                      value="1.6"
+                      min="-349"
+                      max="10000"
+                      step="any"
+                      required
+                    />
+                    <p class="field-note">
+                      Fixed tick comes from the install. Fire advances once
+                      immediately using its callback's deltaTime; first tick
+                      defaults to the fixed tick, but can differ in-game.
+                    </p>
+                  </details>
+                </div>
+              </details>
+              <details class="setup-section" id="weapon-section" open>
+                <summary><span class="setup-step">02</span>Weapon &amp; ammunition</summary>
+                <div class="setup-section-content">
+                  <label for="weapon-search">Find weapon</label>
+                  <input
+                    id="weapon-search"
+                    type="search"
+                    placeholder="Weapon name, ID or caliber"
+                    autocomplete="off"
+                    aria-controls="weapon"
+                    aria-describedby="weapon-results"
+                  />
+                  <p class="field-note" id="weapon-results" role="status"></p>
+                  <label for="weapon">Weapon preset</label>
+                  <select id="weapon" aria-describedby="weapon-note">
+                    <option value="">All weapons / manual setup</option>
+                  </select>
+                  <div id="weapon-chamber-group" hidden>
+                    <label for="weapon-chamber">Chamber / barrel</label>
+                    <select id="weapon-chamber"></select>
+                  </div>
+                  <div id="shot-charge-group" hidden>
+                    <label for="shot-charge">Sticky shot charge <span>%</span></label>
+                    <input id="shot-charge" type="number" value="0" min="0" max="100" step="any" />
+                    <p class="field-note">0% is uncharged; 100% is fully charged.</p>
+                  </div>
+                  <p class="field-note" id="weapon-note" role="status"></p>
+                  <label for="ammo-search">Find ammunition</label>
+                  <input
+                    id="ammo-search"
+                    type="search"
+                    placeholder="Caliber or round name"
+                    autocomplete="off"
+                  />
+                  <label for="ammunition">Game round</label>
+                  <select id="ammunition"></select>
+                  <p class="field-note" id="ammo-note"></p>
+                  <details class="advanced" id="projectile-data">
+                    <summary>Projectile data</summary>
+                    <div class="ammo-facts" id="ammo-facts"></div>
+                  </details>
+                </div>
+              </details>
+              <details class="setup-section" id="muzzle-section">
+                <summary><span class="setup-step">03</span>Muzzle devices</summary>
+                <div class="setup-section-content">
+                  <label for="muzzle-search">Find muzzle devices</label>
+                  <input id="muzzle-search" type="search" placeholder="Name, ID, type or accuracy class" autocomplete="off" />
+                  <label for="muzzle-kind">Device type</label>
+                  <select id="muzzle-kind">
+                    <option value="">All muzzle devices</option>
+                    <option value="suppressor">Suppressors</option>
+                    <option value="brake">Brakes / compensators</option>
+                    <option value="device">Extenders, shrouds &amp; other devices</option>
+                  </select>
+                  <label for="muzzle-device">Available device <span>preview</span></label>
+                  <select id="muzzle-device" aria-describedby="muzzle-device-facts"></select>
+                  <p class="field-note" id="muzzle-results" role="status"></p>
+                  <p class="field-note" id="muzzle-device-facts"></p>
+                  <button id="add-muzzle-device" class="secondary" type="button" disabled>Add to loadout</button>
+                  <p class="field-note" id="muzzle-loadout-note"></p>
+                  <ol id="muzzle-loadout" aria-label="Muzzle devices in registration order"></ol>
+                  <button id="clear-muzzle-devices" class="secondary" type="button" hidden>Remove all devices</button>
+                  <div id="muzzle-geometry-group" hidden>
+                    <label for="muzzle-geometry-mode">Mounted muzzle geometry</label>
+                    <select id="muzzle-geometry-mode">
+                      <option value="stock">Verified stock inner-to-outer mounts</option>
+                      <option value="manual">Measured centered / bore-aligned muzzle</option>
+                    </select>
+                    <div id="manual-muzzle-geometry" hidden>
+                      <div class="input-pair">
+                        <div>
+                          <label for="muzzle-forward-shift">Muzzle forward shift <span>cm</span></label>
+                          <input id="muzzle-forward-shift" type="number" step="any" disabled />
+                        </div>
+                        <div>
+                          <label for="muzzle-up-shift">Muzzle up shift <span>cm</span></label>
+                          <input id="muzzle-up-shift" type="number" step="any" disabled />
+                        </div>
+                      </div>
+                      <p class="field-note">Offsets from the bare muzzle. Positive means forward/up; negative means rearward/down. Stock suggestions, when available, must be verified for the actual mounting. Reversed or sideways-pointing muzzles are not supported.</p>
+                      <label class="checkbox-label" for="confirm-muzzle-geometry">
+                        <input id="confirm-muzzle-geometry" type="checkbox" disabled />
+                        <span>I verified the mounted distance and shifts for a centered, forward/bore-aligned muzzle.</span>
+                      </label>
+                    </div>
+                  </div>
+                  <p class="field-note" id="muzzle-note" role="status"></p>
+                </div>
+              </details>
+              <details class="setup-section" id="sight-section" open>
+                <summary><span class="setup-step">04</span>Sight &amp; range</summary>
+                <div class="setup-section-content">
+                  <label for="zero-model">Sight zeroing rule</label>
+                  <select id="zero-model" name="zeroModel">
+                    <option value="game">Modern PIP scope / reflex sight</option>
+                    <option value="geometric">Legacy geometric sight</option>
+                    <option value="unadjusted">No base zero adjustment</option>
+                    <option value="calculated">
+                      Calculated zero (not an optic setting)
+                    </option>
+                  </select>
+                  <p class="field-note" id="zero-model-note"></p>
+                  <div class="input-pair">
+                    <div>
+                      <label for="zero-range">Optic zero setting <span>m</span></label>
+                      <input
+                        id="zero-range"
+                        name="zeroRange"
+                        type="number"
+                        value="100"
+                        min="1"
+                        max="5000"
+                        step="1"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label for="sight-height">Bare-muzzle sight height <span>cm</span></label>
+                      <input
+                        id="sight-height"
+                        name="sightHeight"
+                        type="number"
+                        value="5"
+                        min="0"
+                        max="100"
+                        step="0.1"
+                        required
+                      />
+                    </div>
+                  </div>
+                  <label for="sight-setback">Bare-muzzle optic setback <span>cm</span></label>
+                  <input
+                    id="sight-setback"
+                    name="sightSetback"
+                    type="number"
+                    value="0"
+                    min="-100"
+                    max="200"
+                    step="0.1"
+                    required
+                  />
+                  <p class="field-note">Measure the optic relative to the bare weapon muzzle. Selected devices add their forward shift to setback and subtract their up shift from sight height automatically. No device: these are the effective values.</p>
+                  <label for="firing-angle">Firing angle <span>°</span></label>
+                  <input
+                    id="firing-angle"
+                    name="inclinationDegrees"
+                    type="number"
+                    value="0"
+                    min="-90"
+                    max="90"
+                    step="any"
+                    aria-describedby="firing-angle-note"
+                    required
+                  />
+                  <p class="field-note" id="firing-angle-note">
+                    Sight-line angle above horizontal: 0° is level, positive is
+                    uphill, negative is downhill. The barrel also includes the
+                    optic-zero adjustment; elevation corrections are relative
+                    to this sight line.
+                  </p>
+                  <div class="input-pair">
+                    <div>
+                      <label for="target-range">Target sight-line range <span>m</span></label>
+                      <input
+                        id="target-range"
+                        name="targetRange"
+                        type="number"
+                        value="300"
+                        min="1"
+                        max="5000"
+                        step="1"
+                        required
+                      />
+                      <p class="field-note">Distance along the sight line from the optical origin, not horizontal ground distance.</p>
+                    </div>
+                    <div>
+                      <label for="range-step">Table interval <span>m</span></label>
+                      <input
+                        id="range-step"
+                        name="rangeStep"
+                        type="number"
+                        value="50"
+                        min="1"
+                        max="1000"
+                        step="1"
+                        required
+                      />
+                    </div>
+                  </div>
+                </div>
+              </details>
+              <details class="setup-section" id="overrides-section">
+                <summary><span class="setup-step">05</span>Manual overrides</summary>
+                <div class="setup-section-content">
+                  <p class="field-note">
+                    Weapon presets fill stock geometry and verified firing
+                    multipliers. Override them for attachments, mods or custom
+                    setups. Missing values need manual input; they are never guessed.
+                  </p>
+                  <label for="barrel-length">Chamber-to-muzzle length <span>m</span></label>
+                  <input
+                    id="barrel-length"
+                    name="barrelLength"
+                    type="number"
+                    value="0.5"
+                    min="0"
+                    max="10"
+                    step="any"
+                    required
+                  />
+                  <p class="field-note">
+                    Distance to the active projectile muzzle, used by H3VR's
+                    caliber-specific velocity curve, not the nominal barrel
+                    designation. Verified attachments update this value; it
+                    remains editable.
+                  </p>
+                  <label for="chamber-multiplier">Chamber velocity multiplier <span>×</span></label>
+                  <input
+                    id="chamber-multiplier"
+                    name="chamberMultiplier"
+                    type="number"
+                    value="1"
+                    min="0.01"
+                    max="100"
+                    step="any"
+                    required
+                  />
+                  <label for="velocity-multiplier">Firearm / shot velocity multiplier <span>×</span></label>
+                  <input
+                    id="velocity-multiplier"
+                    name="velocityMultiplier"
+                    type="number"
+                    value="1"
+                    min="0.01"
+                    max="100"
+                    step="any"
+                    required
+                  />
+                  <button id="restore-weapon" class="secondary" type="button" hidden>
+                    Restore weapon values
+                  </button>
+                </div>
+              </details>
+            </div>
+            <div class="setup-actions">
+              <button class="primary" type="submit">
+                Calculate solution <span aria-hidden="true">↗</span>
+              </button>
+              <p class="field-note">H3VR projectile model · not for real firearms</p>
+            </div>
+          </form>
+        </aside>
+        <section class="results" aria-label="Ballistic solution">
+          <div id="calculation-error" class="notice" role="alert" hidden></div>
+          <div id="solution">
+            <div class="metrics" aria-live="polite">
+              <div class="metric highlight">
+                <span class="metric-label" id="hold-label"
+                  >TARGET ELEVATION</span
+                >
+                <div>
+                  <strong id="hold-value">—</strong
+                  ><span class="metric-unit">mrad</span>
+                </div>
+                <span id="hold-secondary" class="metric-detail">—</span>
+              </div>
+              <div class="metric">
+                <span class="metric-label">TARGET WINDAGE</span>
+                <div>
+                  <strong id="windage-value">—</strong><span class="metric-unit">mrad</span>
+                </div>
+                <span id="windage-secondary" class="metric-detail">—</span>
+                <span id="lateral-label" class="metric-detail">—</span>
+              </div>
+              <div class="metric">
+                <span class="metric-label">TIME OF FLIGHT</span>
+                <div>
+                  <strong id="flight-time">—</strong
+                  ><span class="metric-unit">s</span>
+                </div>
+                <span class="metric-detail" id="target-label">—</span>
+              </div>
+              <div class="metric">
+                <span class="metric-label">LAUNCH SPEED</span>
+                <div>
+                  <strong id="muzzle-speed">—</strong
+                  ><span class="metric-unit">m/s</span>
+                </div>
+                <span class="metric-detail" id="barrel-factor">—</span>
+              </div>
+            </div>
+            <div class="panel chart-panel">
+              <div class="chart-heading">
+                <div>
+                  <p class="eyebrow">FREE FLIGHT</p>
+                  <h2>Trajectory relative to sight line</h2>
+                </div>
+                <div class="legend">
+                  <span class="legend-line"></span>Projectile
+                  <span class="legend-dash"></span>Sight line
+                </div>
+              </div>
+              <svg
+                id="trajectory-chart"
+                viewBox="0 0 800 300"
+                role="img"
+                aria-labelledby="chart-title chart-description"
+              >
+                <title id="chart-title">Projectile trajectory</title>
+                <desc id="chart-description">
+                  Projectile offset perpendicular to the selected sight line.
+                </desc>
+              </svg>
+              <div class="chart-footer">
+                <span id="zero-label">—</span
+                ><span>Sight-line range · meters</span>
+              </div>
+            </div>
+            <div class="panel table-panel">
+              <div class="table-heading">
+                <div class="section-heading">
+                  <span class="section-number">02</span>
+                  <h2>Range card</h2>
+                </div>
+                <button id="export-csv" class="secondary" type="button">
+                  Export CSV
+                </button>
+              </div>
+              <p class="table-note">
+                Positive elevation: raise aim. Negative elevation: lower aim.
+                Positive lateral POI: right of aim; negative: left. Windage is
+                the correction, so positive means aim right and negative means
+                aim left. Range is measured along the sight line. Height is the
+                offset perpendicular to it, not world-vertical height. The chart
+                shows vertical trajectory only; lateral POI is in this card.
+              </p>
+              <div class="table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th scope="col">Range <span>m</span></th>
+                      <th scope="col">Height <span>cm</span></th>
+                      <th scope="col">Lateral POI <span>cm</span></th>
+                      <th scope="col">Elevation <span>mrad</span></th>
+                      <th scope="col">Elevation <span>MOA</span></th>
+                      <th scope="col">Windage <span>mrad</span></th>
+                      <th scope="col">Windage <span>MOA</span></th>
+                      <th scope="col">Flight <span>s</span></th>
+                      <th scope="col">Speed <span>m/s</span></th>
+                    </tr>
+                  </thead>
+                  <tbody id="range-rows"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+      <details class="methodology" id="methodology-section">
+        <summary>Model, accuracy & local data</summary>
+        <div class="methodology-content">
+          <p>
+            This calculator uses numeric parameters extracted from this
+            installation and a port of its free-flight projectile update. It is
+            for H3VR, not real firearms. It does not simulate impacts,
+            penetration, ricochets, dispersion, guided projectiles, or modded
+            behavior.
+          </p>
+          <p>
+            Optic zero setting is an input, not an imposed trajectory crossing.
+            Modern vanilla PIP scopes and reflex sights use the caliber's
+            authored BulletDropCurve at setting × 0.001, independent of the
+            loaded round's speed, mass or ballistic gravity mode. Legacy
+            holo/red-dot sights instead point at a geometric bore-line target.
+            Calculated zero is a separate mode that solves a crossing for the
+            selected round.
+          </p>
+          <p>
+            Weapon presets use the stock prefab's chamber and muzzle transform
+            positions (including parent rotation and scale), serialized chamber
+            velocity multiplier, and verified shot-call multiplier. Select a
+            chamber/barrel for multi-chamber weapons. Geometry is from the authored
+            prefab pose, not live animation; attachments, moving parts or mods may
+            require overrides. Missing geometry or unverified dynamic shot paths
+            are flagged for manual input. Sight geometry remains a separate input.
+          </p>
+          <p>
+            The muzzle-device loadout includes suppressors, brakes, extenders,
+            shrouds and other catalogued devices. Fixed drift comes from the last
+            registered device and the weapon/device identities; drop multipliers
+            combine. Stock mount geometry uses the active device muzzle, mount
+            rotation, root mount scale and verified submount chain. Moving,
+            reversible, off-axis or unverified mounts require measured geometry
+            for a centered, forward/bore-aligned muzzle. Selecting a catalogued
+            device does not prove it fits the weapon. Random device spread is not
+            simulated.
+          </p>
+          <p>
+            Sight geometry assumes a centered, bore-aligned optic with no
+            elevation/windage dial trim or cant. Enter optical-origin height and
+            setback relative to the bare weapon muzzle, not the outer lens
+            position. Selected device geometry supplies the change to the active
+            muzzle; the model and CSV use the resulting effective values. Nominal optic
+            distance is measured along the bore from the muzzle; chart/table
+            range is distance along the selected sight line from the optical
+            origin. Firing angle tilts that sight line relative to world horizontal;
+            gravity remains world-down. Chart/table height is perpendicular to the
+            sight line, and elevation corrections are relative to it. Optic-zero
+            angles remain relative to the sight line, not world horizontal. Scene
+            catch-height and world-height limits still apply to inclined shots.
+            Random range extension is set to its minimum; tables show primary centerline
+            flight only, not spread or submunition paths.
+          </p>
+          <p>
+            The modern scope rule assumes factory base zero is enabled
+            (FixedBaseZero &gt; 0). Choose “No base zero adjustment” for scopes
+            that disable it; their nominal distance setting does not change the
+            base angle.
+          </p>
+          <p id="model-details"></p>
+          <p id="provenance"></p>
+          <p>
+            Source-derived, not yet validated against live VR shots. Frame
+            timing, muzzle orientation and scene settings can affect agreement.
+            The model's supported flight behavior and limits are listed above
+            for the selected round.
+          </p>
+          <p>
+            To regenerate local data: <code>npm run extract</code>. To serve the
+            app: <code>npm run dev</code> (Node.js 22 or newer). The server listens
+            on all network interfaces; open a printed Network URL from another
+            device on the same LAN. Anyone who can reach that port can read the
+            calculator and its numeric dataset. Extraction requires
+            <a href="https://docs.astral.sh/uv/">uv</a>. Raw game files are
+            never served. No external API or account is used.
+          </p>
+          <details id="excluded-section">
+            <summary id="excluded-summary">Unavailable projectiles</summary>
+            <ul id="excluded-rounds"></ul>
+          </details>
+        </div>
+      </details>
+    </main>
+    <footer>
+      <span>H3VRBC / LOCAL RANGE DESK</span
+      ><span>Unofficial · Not affiliated with RUST LTD.</span>
+    </footer>
+  </body>
+</html>
