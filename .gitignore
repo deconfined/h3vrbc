@@ -1,5 +1,4 @@
 game_data/
-public/data/
 .venv/
 __pycache__/
 node_modules/

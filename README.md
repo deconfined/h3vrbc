@@ -56,6 +56,22 @@ To use a different port in a POSIX shell:
 PORT=5180 npm run dev
 ```
 
+## GitHub Pages
+
+The included `.github/workflows/pages.yml` deploys `public/` on pushes to `main` or when run manually from the Actions tab. No Node.js server or frontend build is needed.
+
+1. Generate the dataset locally with `npm run extract`.
+2. Include the generated numeric dataset in your deployment commit. It is ignored by default, so explicitly stage it:
+
+   ```sh
+   git add -f public/data/h3vr.json
+   ```
+
+3. In the repository's **Settings → Pages**, set **Source** to **GitHub Actions**.
+4. Commit and push the workflow and dataset to `main`.
+
+The deployed dataset will be publicly downloadable. Do not commit raw files from `game_data/`; the workflow uploads only `public/`. Deployment fails if the generated dataset is missing. Regenerate and commit the dataset when updating supported game data.
+
 ## Extracting from another location
 
 To use an existing installation without copying it, invoke the extractor directly with either the installation root or its `h3vr_Data` directory:
