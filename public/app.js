@@ -102,6 +102,7 @@ function invalidate(
   $("calculation-time").textContent = "";
   $("calculation-error").textContent = message;
   $("calculation-error").hidden = false;
+  updateFrameStatus();
 }
 
 function selectedRound() {
@@ -957,6 +958,7 @@ function wireFlightControls() {
   // Switching the base plane re-renders against the same solution.
   $("reference-frame").addEventListener("change", () => {
     if (currentSolution) renderChart(currentSolution, currentOptions, selectedRound());
+    updateFrameStatus();
   });
   // Scrub by clicking or dragging anywhere near the flight, in SVG coordinates.
   const chart = $("trajectory-chart");
@@ -996,6 +998,7 @@ function renderChart(solution, options, round) {
   const rendered = renderTrajectoryChart($("trajectory-chart"), solution, view, round);
   flightMarker = rendered.flightMarker;
   flightMarker.setRate($("flight-rate").value);
+  updateFrameStatus();
   // Playback can also stop by itself at the end of the flight, so the transport
   // is refreshed from the marker rather than only from the click handlers.
   flightMarker.onChange = syncFlightControls;
@@ -1151,9 +1154,11 @@ async function runCalculation(event) {
     // Ignore a result the user has already invalidated by changing the setup.
     if (token !== solveToken) return;
     if (!response.ok) throw new Error(response.message);
-    render(response.solution, options, round);
+    // Publish before rendering: renderChart updates the base-plane status, which
+    // needs to know a solution exists.
     currentSolution = response.solution;
     currentOptions = options;
+    render(response.solution, options, round);
     $("calculation-time").textContent = [
     `${Math.round(performance.now() - started)} ms${host ? " · worker" : " · inline"}`,
     `${response.solution.solve.warmStarted}/${response.solution.solve.rows - 1} table solves warm-started`,

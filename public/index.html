@@ -574,18 +574,22 @@
                   </div>
                   <div class="flight-field">
                     <label for="reference-frame">Base plane</label>
-                    <select id="reference-frame" aria-describedby="reference-frame-status"></select>
+                    <select id="reference-frame" aria-describedby="reference-frame-status">
+                      <option value="sight">Sight line</option>
+                      <option value="shooter">Shooter level</option>
+                    </select>
                     <span class="flight-field-status" id="reference-frame-status" role="status"></span>
                   </div>
                   <output id="flight-clock" class="flight-clock" for="flight-play">0.000 s</output>
                 </div>
               </div>
-              <p class="chart-note" id="reference-frame-note">
+              <p class="chart-note">
                 The marker follows the corrected flight. Click or drag the chart
                 to scrub it. <strong>Base plane: Shooter level</strong> draws
                 that plane flat, so an inclined shot rises above it and returns to
                 it at the target, and range then reads as horizontal distance;
-                the simulation is unchanged either way. Its callout reports the
+                the simulation is unchanged either way, and on a level sight line
+                the two planes coincide. Its callout reports the
                 marker's range, altitude above the shooter's plane, lateral offset,
                 instantaneous speed, distance from the straight sight line, and the
                 dispersion cone at that range. The cone is an envelope, not an

@@ -135,3 +135,19 @@ test("nothing in the control group stretches or wraps", () => {
     assert.equal(declarationsFor(selector)["white-space"], "nowrap", `${selector} must not wrap`);
   }
 });
+
+test("every flight control has usable options, so a deployed select is never empty", async () => {
+  const html = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
+  for (const id of ["reference-frame", "flight-rate"]) {
+    const select = new RegExp(`<select id="${id}"[^>]*>([\\s\\S]*?)</select>`).exec(html);
+    assert.ok(select, `${id} must be present in index.html`);
+    const options = [...select[1].matchAll(/<option value="([^"]+)"/g)].map((match) => match[1]);
+    assert.ok(options.length >= 2, `${id} has ${options.length} option(s); a self-closing or stripped select renders empty`);
+    // Every option must be a non-empty, distinct value.
+    for (const value of options) {
+      assert.ok(value.trim().length > 0, `${id} has an empty option value`);
+      assert.equal(typeof value, "string");
+    }
+    assert.equal(new Set(options).size, options.length, `${id} has duplicate option values`);
+  }
+});
