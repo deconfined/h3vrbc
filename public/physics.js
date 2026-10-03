@@ -439,6 +439,56 @@ const fmtRange = (value) => (Number.isInteger(value) ? String(value) : value.toF
 // Report ranges in the units the user entered. A horizontal request is solved in
 // the along-sight-line range it converts to, and echoing that back would show a
 // number they never typed.
+// One turn of the optic's tuning component moves exactly one authored tick, and
+// the tick size is a per-optic property rather than a global constant.
+//
+// FistVR.PIPScopeController.UpdateScopeParams (RVA 509936) computes
+//   ScopeElevationMagnitude * ScopeElevationAdjustmentPerTick
+// and then scales it by ZeroScaling -- x(1/60) for mode 1 (authored in MOA),
+// x(pi/180) for mode 3 (mrad), x0.05625 for mode 2, and no factor at all for
+// mode 0 (already degrees) -- before storing the result in scopeAdjustmentDegrees.
+// ScopeElevationMagnitude is an integer tick count, so the reachable adjustments
+// are the integer multiples of the scaled per-tick value.
+//
+// The extractor resolves that to degrees per click and records the authored unit
+// alongside it. Across the shipped optics the resolved click sizes run from about
+// 0.07 mrad to nearly 5 mrad, so this cannot be a single number.
+export function clickDegrees(ticks, axis) {
+  const entry = ticks?.[axis];
+  return entry && Number.isFinite(entry.degrees) && entry.degrees > 0 ? entry.degrees : null;
+}
+
+// The two clicks that bracket a solved adjustment. `adjustmentDegrees` is the
+// aim change still needed at the muzzle; `range` is where the impact error is
+// measured. Returns the impact offsets, in metres along height and lateral,
+// for the nearer and the farther of the two reachable clicks.
+//
+// This is a one-sided band, not a symmetric tolerance: dialling the nearest
+// click leaves at most half a click of error, dialling the other one leaves up
+// to a full click, and a shooter only ever chooses between these two.
+export function dialBand(adjustmentDegrees, range, stepDegrees) {
+  if (!(stepDegrees > 0) || !Number.isFinite(adjustmentDegrees) || !Number.isFinite(range) || range < 0)
+    return null;
+  const clicks = Math.round(adjustmentDegrees / stepDegrees);
+  const nearer = clicks * stepDegrees;
+  // The adjacent click on whichever side the solved value falls.
+  const farther = (nearer <= adjustmentDegrees ? clicks + 1 : clicks - 1) * stepDegrees;
+  const impact = (dialDegrees) => -range * Math.tan(f((adjustmentDegrees - dialDegrees) * DEG));
+  const offsets = [impact(nearer), impact(farther)].sort((a, b) => a - b);
+  const residual = (dialDegrees) => Math.abs(adjustmentDegrees - dialDegrees);
+  return {
+    stepMoa: stepDegrees * 60,
+    lowerClickMoa: Math.min(nearer, farther) * 60,
+    upperClickMoa: Math.max(nearer, farther) * 60,
+    solvedMoa: adjustmentDegrees * 60,
+    // Impact offset for each click, ascending. Both are reachable.
+    lower: offsets[0],
+    upper: offsets[1],
+    best: Math.min(residual(nearer), residual(farther)) * 60,
+    worst: Math.max(residual(nearer), residual(farther)) * 60,
+  };
+}
+
 function statedRange(options) {
   return Number.isFinite(options.enteredRange) ? options.enteredRange : options.targetRange;
 }
@@ -509,7 +559,37 @@ export function calculate(profile, settings, options) {
     row.spreadRadius = at.boundRadius;
     row.spreadTypicalRadius = at.typicalRadius;
   }
-  return { muzzleSpeed: ctx.muzzleSpeed, barrelFactor: ctx.barrelFactor, boreAngle, boreYaw, authoredDrop, settingRange, muzzleEffects: ctx.effects, target: rows.find((row) => row.isTarget), rows, points, correctedFlight, cantUncertainty: uncertainty, maxDistance: ctx.maxDistance, spread, targetSpread, solve };
+  // Dial granularity, evaluated where the corrected shot actually impacts.
+  // The elevation band is always a choice between two reachable clicks. Windage
+  // is only a granularity choice if the optic offers the tweak at all: without
+  // it the shooter cannot make the lateral correction in the first place, so the
+  // whole correction is the error, which is a different and much larger failure.
+  const targetRow = rows.find((row) => row.isTarget);
+  const atRange = correctedTarget.range;
+  const elevationClick = clickDegrees(options.adjustmentTicks, "elevation");
+  const windageClick = clickDegrees(options.adjustmentTicks, "windage");
+  const elevationBand = dialBand(targetRow.elevationMrad / 1000 / DEG, atRange, elevationClick);
+  const windageBand = options.windageAdjustable === false
+    ? null
+    : dialBand(targetRow.windageMrad / 1000 / DEG, atRange, windageClick);
+  const dial = {
+    clicks: {
+      elevation: { degrees: elevationClick, ...(options.adjustmentTicks?.elevation ?? {}) },
+      windage: { degrees: windageClick, ...(options.adjustmentTicks?.windage ?? {}) },
+    },
+    elevation: elevationBand,
+    windage: windageBand,
+    windageAdjustable: options.windageAdjustable !== false,
+    // An optic that does not serialize a tick size cannot be given a granularity
+    // band. Said plainly rather than filled in with a plausible default.
+    granularityUnknown: !elevationClick || !windageClick,
+  };
+  if (!windageBand) {
+    // The corrected flight lands on aim, so with no windage correction dialled
+    // the round lands where the base shot does. That offset is already solved.
+    dial.windageUnavailable = { lateral: targetRow.lateral };
+  }
+  return { muzzleSpeed: ctx.muzzleSpeed, barrelFactor: ctx.barrelFactor, boreAngle, boreYaw, authoredDrop, settingRange, muzzleEffects: ctx.effects, target: targetRow, rows, points, correctedFlight, cantUncertainty: uncertainty, maxDistance: ctx.maxDistance, spread, targetSpread, dial, solve };
 }
 
 export function toCSV(solution, profile, options) {
@@ -552,6 +632,22 @@ export function toCSV(solution, profile, options) {
     ["Dispersion total min MOA", solution.spread.minMoa], ["Dispersion total max MOA", solution.spread.maxMoa],
     ["Dispersion complete", solution.spread.incomplete ? `no: no extracted value for ${solution.spread.missing.join(", ")}, so the bound omits that term` : "yes"],
     ["Dispersion interpretation", "Authored bounds of a per-object random draw made in Awake; not a predicted group and not reproducible across sessions. The three-sample mean used by Fire is bounded by the full-disc figure and has an expected radius of 0.408 of it."],
+    ["Dial elevation click unit", solution.dial.clicks.elevation.unit ?? "unknown"],
+    ["Dial elevation click authored per tick", solution.dial.clicks.elevation.perTick ?? ""],
+    ["Dial elevation click mrad", solution.dial.clicks.elevation.degrees != null ? solution.dial.clicks.elevation.degrees * (Math.PI / 180) * 1000 : ""],
+    ["Dial windage click mrad", solution.dial.clicks.windage.degrees != null ? solution.dial.clicks.windage.degrees * (Math.PI / 180) * 1000 : ""],
+    ["Dial elevation solved MOA", solution.dial.elevation?.solvedMoa ?? ""],
+    ["Dial elevation lower click MOA", solution.dial.elevation?.lowerClickMoa ?? ""],
+    ["Dial elevation upper click MOA", solution.dial.elevation?.upperClickMoa ?? ""],
+    ["Dial elevation residual on nearer click MOA", solution.dial.elevation?.best ?? ""],
+    ["Dial elevation impact lower cm", solution.dial.elevation ? solution.dial.elevation.lower * 100 : ""],
+    ["Dial elevation impact upper cm", solution.dial.elevation ? solution.dial.elevation.upper * 100 : ""],
+    ["Dial windage adjustable", solution.dial.windageAdjustable ? "yes" : "no: the lateral correction cannot be dialled at all"],
+    ["Dial windage residual on nearer click MOA", solution.dial.windage?.best ?? ""],
+    ["Dial windage impact lower cm", solution.dial.windage ? solution.dial.windage.lower * 100 : ""],
+    ["Dial windage impact upper cm", solution.dial.windage ? solution.dial.windage.upper * 100 : ""],
+    ["Dial windage undialled lateral cm", solution.dial.windageUnavailable ? solution.dial.windageUnavailable.lateral * 100 : ""],
+    ["Dial interpretation", "One turn of the optic tuning component moves one authored tick, a per-optic value resolved to degrees from PIPScopeController.UpdateScopeParams. Only the two clicks bracketing a solved adjustment are reachable, so the band is one-sided and the nearer click is the better one. Granularity is a choice between reachable clicks and is independent of the dispersion bound, which is a random per-object draw made at launch."],
     ["Dispersion radius at selected range cm", solution.targetSpread.boundRadius * 100],
     ["Dispersion typical radius at selected range cm", solution.targetSpread.typicalRadius * 100],
     ["Projectile spawn recess behind muzzle m", SPAWN_RECESS_METRES],

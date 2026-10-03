@@ -5,6 +5,7 @@ import { compatibleOpticMounts, opticGeometry, searchOptics, slidingOpticMount }
 import { createFavoriteStore } from "./favorites.js";
 import { createInterfaceStore } from "./interface-state.js";
 import { renderTrajectoryChart } from "./trajectory-chart.js";
+import { clickMradFromDegrees, fmt, formatDialedSetting } from "./format.js";
 import { solve } from "./solver-worker.js";
 
 const $ = (id) => document.getElementById(id);
@@ -70,7 +71,6 @@ const postToWorker = (host, request, resolve, reject) => {
   host.postMessage(request);
 };
 
-const fmt = (value, digits = 2) => Number(value).toFixed(digits);
 const option = (value, label) => {
   const element = document.createElement("option");
   element.value = value;
@@ -914,6 +914,12 @@ function readOptions() {
     cantToleranceDegrees: values.get("cantMode") === "uncertainty" ? Number(values.get("cantToleranceDegrees")) : 0,
     caliber: caliberById.get(selectedRound().caliberId),
     zeroModel: values.get("zeroModel"),
+    // Not extracted from the install: the per-optic capability lives on the
+    // runtime scope-tuning gizmo, so the user states it.
+    windageAdjustable: values.get("windageAdjustable") === "on",
+    // Per-optic tuning granularity, in degrees per click, from the source
+    // component. Not every optic serializes it, so it may be absent.
+    adjustmentTicks: selectedOptic()?.adjustmentTicks ?? null,
     zeroRange: Number(values.get("zeroRange")),
     barrelLength: Number(values.get("barrelLength")),
     chamberMultiplier: Number(values.get("chamberMultiplier")),
@@ -936,8 +942,100 @@ function readOptions() {
   };
 }
 
+let flightMarker = null;
+
+// Flight transport. Playback only ever starts from these handlers, so a fresh
+// render is never animated by surprise.
+function wireFlightControls() {
+  // toggle/seek notify through onChange, so the buttons stay in step when the
+  // flight ends by itself as well as when they are clicked.
+  $("flight-play").addEventListener("click", () => flightMarker?.toggle());
+  $("flight-rewind").addEventListener("click", () => flightMarker?.seek(0));
+  $("flight-rate").addEventListener("change", (event) => {
+    flightMarker?.setRate(event.target.value);
+  });
+  // Switching the base plane re-renders against the same solution.
+  $("reference-frame").addEventListener("change", () => {
+    if (currentSolution) renderChart(currentSolution, currentOptions, selectedRound());
+  });
+  // Scrub by clicking or dragging anywhere near the flight, in SVG coordinates.
+  const chart = $("trajectory-chart");
+  const toSvg = (event) => {
+    const box = chart.getBoundingClientRect();
+    if (!box.width || !box.height) return null;
+    return [(event.clientX - box.left) / box.width * 1040, (event.clientY - box.top) / box.height * 440];
+  };
+  let scrubbing = false;
+  chart.addEventListener("pointerdown", (event) => {
+    const point = toSvg(event);
+    if (!point || !flightMarker) return;
+    scrubbing = true;
+    chart.setPointerCapture?.(event.pointerId);
+    flightMarker.scrubTo(...point);
+  });
+  chart.addEventListener("pointermove", (event) => {
+    if (!scrubbing) return;
+    const point = toSvg(event);
+    if (point) flightMarker.scrubTo(...point);
+  });
+  const endScrub = (event) => {
+    if (!scrubbing) return;
+    scrubbing = false;
+    chart.releasePointerCapture?.(event.pointerId);
+  };
+  chart.addEventListener("pointerup", endScrub);
+  chart.addEventListener("pointercancel", endScrub);
+}
+
 function renderChart(solution, options, round) {
-  renderTrajectoryChart($("trajectory-chart"), solution, options, round);
+  // The base-plane choice is a view preference, not a solve input: it changes
+  // what the chart is drawn against and never the simulation, so it stays out
+  // of the options object, the CSV and the saved interface.
+  const view = { ...options, referenceFrame: $("reference-frame").value };
+  flightMarker?.destroy();
+  const rendered = renderTrajectoryChart($("trajectory-chart"), solution, view, round);
+  flightMarker = rendered.flightMarker;
+  flightMarker.setRate($("flight-rate").value);
+  // Playback can also stop by itself at the end of the flight, so the transport
+  // is refreshed from the marker rather than only from the click handlers.
+  flightMarker.onChange = syncFlightControls;
+  syncFlightControls();
+  return rendered;
+}
+
+// The base-plane toggle can be a no-op, and a control that silently does nothing
+// reads as broken. Two cases: on a level sight line the two frames are the same
+// plane by definition, and with no calculated solution there is nothing to redraw.
+function updateFrameStatus() {
+  const status = $("reference-frame-status");
+  if (!status) return;
+  const inclination = Number($("firing-angle").value) || 0;
+  if (!currentSolution) {
+    status.textContent = "Calculate to compare frames.";
+  } else if (Math.abs(inclination) < 0.05) {
+    status.textContent = "Same plane on a level shot.";
+  } else {
+    status.textContent = shooterFrameActive()
+      ? `Flat plane · ${fmt(inclination, 1)}° sight line`
+      : `${fmt(inclination, 1)}° sight line · flat plane available`;
+  }
+}
+
+const shooterFrameActive = () => $("reference-frame").value === "shooter";
+
+// Keep the transport buttons truthful about a marker that no longer exists, and
+// about a playback that stopped on its own at the end of the flight.
+function syncFlightControls() {
+  const total = flightMarker?.totalTime ?? 0;
+  const time = flightMarker?.time ?? 0;
+  const playing = flightMarker?.playing ?? false;
+  const available = flightMarker?.available ?? false;
+  const atEnd = available && time >= total;
+  $("flight-play").textContent = playing ? "Pause" : atEnd ? "Replay flight" : "Play flight";
+  $("flight-play").setAttribute("aria-pressed", String(playing));
+  $("flight-clock").textContent = `${fmt(time, 3)} / ${fmt(total, 3)} s`;
+  for (const id of ["flight-play", "flight-rewind", "flight-rate"]) $(id).disabled = !available;
+  $("flight-play").title = available ? "" : "Playback needs an animated frame clock in this browser; the chart and callout still work.";
 }
 
 function render(solution, options, round) {
@@ -945,19 +1043,36 @@ function render(solution, options, round) {
   // Scope/reticle settings are the inverse of the solved weapon aim changes.
   // Do not invert the launch angles, range card, or CSV's aim corrections.
   const scopeSetting = tiltedDials ? "scope setting (weapon axis)" : "scope setting";
-  const scopeValue = (value, digits) => fmt(Number(fmt(-value, digits)), digits);
-  $("hold-value").textContent = scopeValue(solution.target.elevationMrad, 3);
-  $("hold-secondary").textContent =
-    `${scopeValue(solution.target.elevationMoa, 2)} MOA · ${Math.abs(solution.target.elevationMrad) < 0.0000001 ? "no elevation adjustment" : scopeSetting}`;
-  $("windage-value").textContent = scopeValue(solution.target.windageMrad, 3);
-  $("windage-secondary").textContent =
-    `${scopeValue(solution.target.windageMoa, 2)} MOA · ${Math.abs(solution.target.windageMrad) < 0.0000001 ? "no windage adjustment" : scopeSetting}`;
+// The click, from the selected optic's own serialized tick.
+  const clickMrad = (axis) => clickMradFromDegrees(options.adjustmentTicks?.[axis]?.degrees);
+  const elevation = formatDialedSetting(solution.target.elevationMrad, clickMrad("elevation"),
+  { zeroLabel: "no elevation adjustment", scopeLabel: scopeSetting });
+const windage = formatDialedSetting(solution.target.windageMrad, clickMrad("windage"),
+  { zeroLabel: "no windage adjustment", scopeLabel: scopeSetting });
+$("hold-value").textContent = elevation.mrad;
+$("hold-secondary").textContent = `${elevation.moa} MOA · ${elevation.suffix}`;
+$("windage-value").textContent = windage.mrad;
+$("windage-secondary").textContent = `${windage.moa} MOA · ${windage.suffix}`;
   $("lateral-label").textContent = `Base POI: ${directional(solution.target.lateral * 100, "cm", "right", "left", 2)} of POA`;
-  $("flight-time").textContent = fmt(solution.target.time, 3);
+  // Mirrored on the elevation cell: height is the sight-relative offset of the
+  // base shot, lateral is its sideways offset, and both are in the unrolled
+  // sight frame rather than world-vertical height.
+  $("height-label").textContent = `Base POI: ${directional(solution.target.height * 100, "cm", "high", "low", 2)} of POA`;
+  // Flight time belongs to the corrected shot, alongside corrected impact: both
+  // describe the flight the chart plots. The range card keeps the base shot's
+  // own per-row time, which is a different flight.
+  $("flight-time").textContent = fmt(solution.correctedFlight.target.time, 3);
   $("target-label").textContent = `${fmt(options.enteredRange, 1)} m ${options.rangeMode === "horizontal" ? "horizontal" : "along sight line"} · ${fmt(options.inclinationDegrees, 1)}° sight line`;
   $("muzzle-speed").textContent = fmt(solution.muzzleSpeed, 1);
-  $("barrel-factor").textContent =
-    `${fmt(solution.barrelFactor, 3)}× barrel curve`;
+  // Muzzle velocity is only meaningful alongside the angle it leaves at, and the
+  // angle that matters is the corrected shot's, not the base bore.
+  const borePitch = (solution.correctedFlight.boreAngle * 180) / Math.PI;
+  const boreYaw = (solution.correctedFlight.boreYaw * 180) / Math.PI;
+  $("launch-detail").textContent = [
+    `${fmt(borePitch, 3)}° corrected bore`,
+    Math.abs(boreYaw) < 0.0005 ? "no corrected yaw" : `${fmt(Math.abs(boreYaw), 3)}° ${boreYaw > 0 ? "right" : "left"} of sight line`,
+    `${fmt(solution.barrelFactor, 3)}× barrel curve`,
+  ].join(" · ");
   // The chart plots the corrected shot; say so next to the numbers a reader is
   // most likely to mistake for the plotted flight.
   $("corrected-impact").textContent = fmt(solution.correctedFlight.target.height * 100, 2);
@@ -1217,6 +1332,7 @@ async function start() {
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   });
+  wireFlightControls();
   if (!restoredInterface || savedInterface.calculated) await runCalculation();
   else invalidate("Remembered setup restored. Calculate to update the firing solution.");
   if (restoredInterface) {

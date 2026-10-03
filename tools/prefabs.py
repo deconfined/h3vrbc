@@ -21,6 +21,17 @@ def ancestry(pe):
     return types, result
 
 
+# PIPScopeController.ZeroScaling selects the unit of the per-tick adjustment, from
+# the scale factors UpdateScopeParams applies before storing the result in
+# scopeAdjustmentDegrees. ZeroScaling 0 applies no factor, so the authored value is
+# already in degrees. Mode 2 has no documented unit and is left unlabelled rather
+# than guessed.
+_ZERO_SCALING_UNITS = {0: "deg", 1: "MOA", 2: None, 3: "mrad"}
+# Degrees per authored unit, from the same method.
+_ZERO_SCALING_DEGREES = {0: 1.0, 1: 0.01666666753590107, 2: 0.05624999850988388,
+                         3: 0.0572957806289196}
+
+
 class Prefabs:
     def __init__(self, assets, pe, types, families, shot_cache):
         self.assets, self.pe, self.types, self.families = assets, pe, types, families
@@ -139,6 +150,36 @@ class Prefabs:
         fallback = data["FixedBaseZero"] if name == "PIPScopeController" else 10.0  # Verified ReflexSightController ctor.
         default = values[index] if values and 0 <= index < len(values) else fallback if not values else None
         result["defaultZeroRange"] = default if default is not None and default > 0 else None
+        # Player-facing tuning granularity. PIPScopeController.ZeroingMode
+        # (ZeroScaling) selects the unit the magnitude is authored in: 1 is MOA,
+        # 3 is mrad, and UpdateScopeParams converts with x1/60 or x(pi/180)
+        # accordingly. The magnitude itself is an integer tick count, so one turn
+        # of the adjustment component moves exactly AdjustmentPerTick of that
+        # unit. Recorded per optic and in degrees, because the click size is a
+        # property of the optic rather than a global constant.
+        per_tick = {}
+        if name == "PIPScopeController":
+            # ZeroingMode 0 adjusts the scope, 1 the reticle; each has its own
+            # per-tick size and they share ZeroScaling's unit.
+            prefix = "Reticle" if data.get("ZeroingMode") == 1 else "Scope"
+            scaling = data.get("ZeroScaling")
+            degrees = _ZERO_SCALING_DEGREES.get(scaling)
+            unit = _ZERO_SCALING_UNITS.get(scaling)
+            for axis in ("elevation", "windage"):
+                value = data.get(f"{prefix}{axis.capitalize()}AdjustmentPerTick")
+                if isinstance(value, (int, float)) and value > 0:
+                    per_tick[axis] = {"unit": unit, "perTick": value,
+                                      "degrees": value * degrees if degrees else None}
+        else:
+            # ReflexSightController.Zero scales its reticle adjustment by 1/60.
+            for axis, field in (("elevation", "ReticleElevationAdjustmentPerTick"),
+                                ("windage", "ReticleWindageAdjustmentPerTick")):
+                value = data.get(field)
+                if isinstance(value, (int, float)) and value > 0:
+                    per_tick[axis] = {"unit": "MOA", "perTick": value,
+                                      "degrees": value * 0.01666666753590107}
+        if per_tick:
+            result["adjustmentTicks"] = per_tick
         if name == "PIPScopeController":
             result["fixedBaseZero"] = data["FixedBaseZero"]
             if data["FixedBaseZero"] <= 0:

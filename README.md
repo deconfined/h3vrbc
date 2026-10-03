@@ -105,18 +105,19 @@ The **isometric 2.5D chart** shows the projectile flight **after applying the so
 
 The projectile endpoint marks the selected distance, not a target object. The game's nominal base zero does not guarantee a crossing for the uncorrected flight; **Calculated zero** does. Neither requires the corrected flight to cross at the base-zero distance when solving for a different range. Height and lateral scales are independently exaggerated and automatically scaled, not a to-scale scene. The height ceiling is the **highest plotted projectile sample**, including cant probes when enabled; the uncorrected POA cannot stretch it upward. Flat flight keeps a finite height span below the zero-height sight plane. The grid represents that **corrected sight plane**, not terrain; the blue dashed plane projection shows the corrected flight's lateral displacement. Range/lateral bounds still account for the rotated optic reference. On narrow screens, scroll the chart horizontally.
 
-When the uncorrected ray intersects the displayed back wall at the selected range, a separate POA marker and L-shaped height/lateral guides show its separation from corrected impact. Both legs remain on that plane. A readout **beside** the wall shows **RISE** when corrected impact is above or level with uncorrected POA, or **DROP** when below, alongside **DRIFT**, **ERROR** and **CONE**, color-coded to their measurement lines. Height/lateral values are geometric distance magnitudes in centimetres, not elevation/windage dial settings; tooltips give signed changes toward corrected POI. ERROR gives sampled lateral cant uncertainty in cm: **± is per side**, while asymmetric left/right bounds are listed separately. Its purple width ruler sits below the impact region on the wall to avoid masking the lateral guide. Off-wall intersections get no marker or offset guides, but their actual plane distances remain in the side readout. Missing finite forward intersections show **—**. Disabled uncertainty also shows **—**, and incomplete uncertainty shows **UNBOUNDED**, never a misleading zero width. CONE always keeps its figure; it is drawn on the wall only when it fits, so a long-range cone never rescales the flight it annotates.
+Measurements are taken on the **impact plane**: the plane through corrected impact, perpendicular to the sight line, at the selected range. The chart's readout is headed **\<range\> m / IMPACT PLANE**. When the uncorrected ray intersects the displayed plane, a separate POA marker and L-shaped height/lateral guides show its separation from corrected impact. Both legs remain on that plane. A readout **beside** the plane shows **RISE** when corrected impact is above or level with uncorrected POA, or **DROP** when below, alongside **DRIFT**, **ERROR** and **CONE**, color-coded to their measurement lines. Height/lateral values are geometric distance magnitudes in centimetres, not elevation/windage dial settings; tooltips give signed changes toward corrected POI. ERROR gives sampled lateral cant uncertainty in cm: **± is per side**, while asymmetric left/right bounds are listed separately. Its purple width ruler sits below the impact region on the wall to avoid masking the lateral guide. Off-wall intersections get no marker or offset guides, but their actual plane distances remain in the side readout. Missing finite forward intersections show **—**. Disabled uncertainty also shows **—**, and incomplete uncertainty shows **UNBOUNDED**, never a misleading zero width. CONE always keeps its figure; it is drawn on the wall only when it fits, so a long-range cone never rescales the flight it annotates.
 
 The calculator simulates **two distinct shots**, and labels which is which on every
 number it shows. The **base shot** is what the projectile does at the optic's own
 setting, with no correction applied; that is the whole range card and the
 **Export CSV** body. The **corrected shot** is a separate re-integration at the
 solved aim angles for the selected range; that is what the isometric chart
-plots, and the **CORRECTED IMPACT** metric reports. The flight time in the table
-is therefore not the flight time of the plotted curve. Their offsets, times and
-speeds differ, and only the corrected flight is aimed at the target.
+plots, and what the **CORRECTED IMPACT** and **SHOT FLIGHT TIME** metrics report.
+The per-row time in the table is therefore not the flight time of the plotted
+curve. Their offsets, times and speeds differ, and only the corrected flight is
+aimed at the target.
 
-The top **ELEVATION ADJUSTMENT** and **WINDAGE ADJUSTMENT** callouts give the required scope/reticle setting changes from the base zero in mrad and MOA. Their signs are **the inverse of the solved aim corrections**, not instructions to raise/lower aim. With specific cant, they use the weapon's tilted elevation/windage axes.
+The top **ELEVATION ADJUSTMENT** and **WINDAGE ADJUSTMENT** callouts give the required scope/reticle setting changes from the base zero in mrad and MOA. Their signs are **the inverse of the solved aim corrections**, not instructions to raise/lower aim. With specific cant, they use the weapon's tilted elevation/windage axes. Each is a full-height cell and carries its own **Base POI** line underneath: the elevation cell reports the base shot's height offset and the windage cell its lateral offset, each in centimetres in the unrolled sight frame. These describe the base shot, not the corrected impact.
 
 The range card and **Export CSV** retain the **uncorrected** offsets, time and speed at the base optic setting, alongside the original aim corrections: positive elevation means raise aim; positive windage means aim right. Positive lateral point of impact means the uncorrected projectile is right of the aim point in the unrolled sight frame. Metadata also records cant assumptions, selected-range uncertainty bounds, and every dispersion component with its interpretation.
 
@@ -157,7 +158,12 @@ The **MRAD** with no device fitted bounds at 0.3 MOA, roughly 10.5 cm across at
 1.05 MOA, 36.7 cm at 600 m and 73.3 cm at 1200 m. On a long-range scene, this
 is typically larger than the drop the chart spends its vertical scale on, which
 is the point: report both rather than let the centerline imply precision the
-game will not deliver. See [dispersion and spawn-offset notes](docs/dispersion.md).
+game will not deliver.
+
+**MUZZLE VELOCITY** reports the launch speed together with the **post-correction
+bore angle**, because a speed on its own does not describe where the projectile
+is pointed. The angle is the corrected shot's, relative to the sight line, and
+its yaw component is included whenever a fitted device leaves one. See [dispersion and spawn-offset notes](docs/dispersion.md).
 
 ### Range measurement
 
@@ -173,6 +179,123 @@ origin. **Measured as** converts the request:
 
 The chart and the range card remain in sight-line range; only the input and the
 target label change.
+
+### Chart base plane and the flight marker
+
+**Base plane** chooses what the isometric chart is drawn against. It is a view
+preference and never changes the simulation, the CSV or the saved interface.
+
+- **Along the sight line** (default): the plane contains the line the shooter is
+  aiming down, which is what makes drop legible at 2 mrad scales.
+- **Level with the shooter**: the plane is horizontal through the shooter, so an
+  inclined shot visibly rises above it and returns to it at the target, and range
+  reads as horizontal distance. The two frames describe the same flight: the
+  transform is the exact inverse of the projection the integrator uses, verified
+  against that source projection in the tests.
+
+The two cannot simply be merged. At 600 m and a 30° firing angle the sight line is
+roughly 300 m above the shooter's plane at the target while the drop of interest
+is centimetres, so drawing both to one scale would flatten the flight. Pick the
+frame that answers the question.
+
+**Play flight** runs a marker along the corrected trajectory. It starts parked at
+the muzzle and never moves on its own, so a fresh render is never animated by
+surprise and `prefers-reduced-motion` needs no special case. **Rewind** returns it
+to the muzzle, **Rate** selects 0.1× to 1×, and clicking or dragging anywhere near
+the flight scrubs to that moment.
+
+The marker is interpolated from the same samples the trajectory polyline is drawn
+from, so it can never leave the drawn line, and it inherits the real deceleration
+to drag rather than an eased approximation. Its callout tracks it and reports:
+
+| Field | Meaning |
+| --- | --- |
+| range / horiz range | The chart's own forward axis: sight-line range, or horizontal distance in the shooter frame |
+| altitude | Height above the shooter's level plane, in both views |
+| lateral | Sideways offset in the unrolled sight frame |
+| speed | Instantaneous velocity magnitude, falling monotonically to drag |
+| sight-line gap | Accumulated error: distance from the straight sight ray. Grows as the round leaves the line, closes to zero at the target |
+| cone | The dispersion **envelope radius** at the marker's current range |
+
+### Dial granularity and missing windage
+
+Scope tuning does not move continuously, and **the click size is a per-optic
+serialized property**, not a global constant. One turn of the optic's tuning
+component moves exactly one authored tick:
+`FistVR.PIPScopeController.UpdateScopeParams` (RVA 509936) computes
+`ScopeElevationMagnitude * ScopeElevationAdjustmentPerTick` — an integer tick
+count times an authored size — and scales it by `ZeroScaling` before storing the
+result in `scopeAdjustmentDegrees`, so mode 1 is MOA, mode 3 is mrad and mode 0
+is already degrees.
+
+Resolved across the shipped optics the click spans **66×**, from 0.073 mrad to
+4.8 mrad:
+
+| Authored | mrad/click | Optics |
+| --- | --- | --- |
+| 0.25 MOA | 0.073 | 8 |
+| 0.1 mrad | 0.100 | 15 |
+| **0.5 MOA** | **0.145** | **78** |
+| 0.2 mrad | 0.200 | 4 |
+| 1.0 MOA | 0.291 | 40 |
+| 0.5 / 1.0 mrad | 0.5 / 1.0 | 6 |
+| 0.2765° | 4.83 | 2 |
+
+So the usual click is **0.145 mrad**, and most optics are coarser than 0.1 mrad.
+Three optics serialize no tick size at all and are given **no** granularity band
+rather than a plausible default.
+
+The **ELEVATION ADJUSTMENT** and **WINDAGE ADJUSTMENT** callouts follow the same
+grid: each shows the **nearest reachable click**, not the solved ideal, at a
+precision derived from that optic's click — two decimals for the 0.145 mrad
+majority, three only for the sub-0.1 mrad optics, one for the coarsest. The
+detail line names the click count (`33 clicks · scope setting`). With no optic
+selected the grid is unknown, so the solved value is reported at the previous
+precision and left unsnapped rather than guessed. This matters: quoting
+`-4.804 mrad` for an optic whose nearest click is `-4.930` or `-4.785` describes
+a setting nobody can dial. (Note this is a different interface from
+`FistVR.Amplifier`'s tuning menu, whose grid is a fixed 0.25 MOA — not what the
+optic's adjustment components do.)
+
+Only **two** clicks bracket a solved adjustment, so this is a *choice*, not a
+tolerance: the two residuals are `δ` and `δ − one click`, which means the two
+reachable impacts always straddle the aim point unless the solved value lands
+exactly on a click. Dial the nearer one and the residual is at most half a
+click; dial the other and it is up to a full click.
+
+**How it combines with dispersion.** They are independent, and not the same kind
+of thing:
+
+| | Nature | Contributes |
+| --- | --- | --- |
+| Granularity | A choice between two reachable clicks, one axis at a time | A one-sided band, exactly one click wide |
+| Dispersion | A random draw made once at launch | A disc of the envelope radius |
+
+The reachable impacts are the elevation band crossed with the windage band —
+four points — and the dispersion disc is centred on whichever of them the group
+lands on. So the outline is the **click rectangle widened by the disc**: a
+rounded rectangle, drawn explicitly rather than approximated with a box and a
+circle. Both grow linearly with range, so which dominates is a property of the
+setup, not the distance: for a bare precision rifle at 600 m the two are the same
+order (a 0.145 mrad click ≈ 8.5 cm against ≈ 10.5 cm of dispersion), and fitting
+a device with a wide mechanical accuracy class puts dispersion an order of
+magnitude clear.
+
+**Not every optic offers windage.** `FistVR.OpticOptionType` gates the tuning
+menu, and only `WindageTweak` (ordinal 7) provides the lateral tweak. Without it
+the lateral correction cannot be dialled **at all** — not a click-sized residual
+but the entire correction, which at 600 m is several times the click size. That
+capability lives on a runtime scope-tuning gizmo absent from the extractable
+assets, so **This optic allows windage adjustment** is a stated setting rather
+than extracted data. Confirm it for the optic in use; when it is off, the DIAL
+readout says `no windage` with the undialled distance rather than quoting a
+misleading click residual.
+
+Two of those deserve care. The sight-line gap is the accumulated error worth
+watching, and in the shooter frame it is still read in the sight frame, so the two
+views can never report different gaps. The cone is **not** accumulating: dispersion
+is a single launch-angle offset in the source, so this is the same envelope the
+**CONE** readout reports at the target, evaluated where the marker happens to be.
 
 ### Weapon cant
 

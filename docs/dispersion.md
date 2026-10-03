@@ -88,6 +88,92 @@ Rather than treat its mechanical term as zero, `dispersion()` excludes it, sets
 `incomplete`, names the omission in `missing`, and the UI and CSV prefix the
 figure with `≥`. The same applies to a round with no extracted `spreadDegrees`.
 
+## Dial granularity
+
+Not dispersion, but the other bounded source of impact error, and it composes
+with the cone rather than replacing it.
+
+One turn of the optic's tuning component moves exactly one authored tick. The tick
+size is a **per-optic serialized property**, not a global constant.
+
+`FistVR.PIPScopeController.UpdateScopeParams`, RVA **509936** (`0x7c7f0`),
+IL 564-779:
+
+```
+local = ScopeElevationMagnitude * ScopeElevationAdjustmentPerTick
+ZeroScaling == 1 -> local *= 0.01666666753590107
+ZeroScaling == 2 -> local *= 0.05624999850988388
+ZeroScaling == 3 -> local *= 0.0572957806289196
+ZeroScaling == 0 -> no factor
+scopeAdjustmentDegrees = (base + windageLocal, local)
+```
+
+`ScopeElevationMagnitude` is an integer tick count and the destination field is
+named `scopeAdjustmentDegrees`, so the scaling factors convert the authored unit
+into degrees: mode 1 is **MOA**, mode 3 is **mrad**, mode 0 is already degrees.
+Mode 2 has no documented unit and is left unlabelled. `ZeroingMode` selects
+scope versus reticle adjustment, each with its own per-tick value.
+
+Resolved across the shipped optics, the click size spans **66x**:
+
+| Authored | mrad per click | Optics |
+| --- | --- | --- |
+| 0.25 MOA | 0.0727 | 8 |
+| 0.1 mrad | 0.1000 | 15 |
+| 0.5 MOA | 0.1454 | 78 |
+| 0.2 mrad | 0.2000 | 4 |
+| 0.25 (mode 2) | 0.2454 | 4 |
+| 0.25 mrad | 0.2500 | 2 |
+| 1.0 MOA | 0.2909 | 40 |
+| 0.5 mrad | 0.5000 | 2 |
+| 1.0 mrad | 1.0000 | 4 |
+| 0.2765 degrees | 4.8258 | 2 |
+
+The common click is 0.5 MOA = 0.145 mrad, and most scopes are coarser than a
+0.1 mrad click. Three optics serialize no tick at all and are given no band
+rather than a plausible default.
+
+Only **two** clicks bracket a solved adjustment, so this is a choice, not a
+tolerance: the two residuals are `d` and `d - one click`, which means the two
+reachable impacts always land on opposite sides of the aim point unless the
+solved value coincides with a click.
+
+## A separate, coarser interface
+
+`FistVR.Amplifier` (the scope-tuning menu) has its own grid:
+`Amplifier.Zero`, RVA **429036**, rotates by
+`Quaternion.AngleAxis(0.004166674800217152f * Step, axis)` with
+`ElevationStep`/`WindageStep` incremented per click by `SetCurSettingUp`
+(RVA 2186960). That is a fixed 0.0041666748 degrees, i.e. 0.2500005 MOA. It is a
+**different interface** from the adjustment components the player turns on the
+optic, and it is not what the reticle does. Do not use it as the click size.
+
+## Missing windage
+
+`FistVR.OpticOptionType` gates the tuning menu:
+
+| Ordinal | Member |
+| --- | --- |
+| 1 | `Zero` |
+| 2 | `Magnification` |
+| 3 | `ReticleLum` |
+| 4 | `ReticleType` |
+| 5 | `FlipState` |
+| 6 | `ElevationTweak` |
+| 7 | `WindageTweak` |
+
+`SetCurSettingUp` switches on `OptionTypes[CurSelectedOptionIndex]` and does
+nothing for ordinals 2-5; cases 6 and 7 bump `ElevationStep` and `WindageStep`.
+An optic whose option list has no `WindageTweak` offers no lateral adjustment at
+all, which is a different failure from a click-sized residual: the whole lateral
+correction is undialled.
+
+`OptionTypes` is a serialized field on `FistVR.Amplifier`, the per-weapon
+scope-tuning gizmo spawned from `Prefab_OpticUI` in `Amplifier.Awake` (RVA
+2449520). No `Amplifier` component exists in `resources.assets`, any
+`StreamingAssets` bundle, or levels 0-2, so this capability is **not extractable**
+with the current tooling and is surfaced as a stated setting instead.
+
 ## Projectile spawn recess
 
 `Fire`, IL offsets 439-476:

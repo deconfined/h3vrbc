@@ -56,6 +56,50 @@ test("range measurement mode", { skip: !data && "Run npm run extract for install
   assert.equal($("calculation-error").hidden, true, $("calculation-error").textContent);
 });
 
+test("both dial cells carry their own base POI line", { skip: !data && "Run npm run extract for install integration checks" }, async (t) => {
+  const { dom, close } = await mount(data, "dial-poi");
+  t.after(close);
+  const $ = (id) => dom.window.document.getElementById(id);
+  const set = (id, value) => {
+    $(id).value = value;
+    for (const type of ["input", "change"])
+      $(id).dispatchEvent(new dom.window.Event(type, { bubbles: true }));
+  };
+  await waitFor(() => $("solution")?.hidden === false);
+  set("weapon", "MRAD");
+  set("scene", data.scenes.find((item) => item.maxRange > 2000).file);
+  set("target-range", "400");
+  $("setup-form").requestSubmit();
+  await waitFor(() => !$("setup-form").querySelector('button[type="submit"]').disabled);
+  assert.equal($("calculation-error").hidden, true, $("calculation-error").textContent);
+
+  // Elevation reports the base shot's height offset, windage its lateral one,
+  // each phrased like the cell it sits under rather than as a dial change.
+  assert.match($("height-label").textContent, /^Base POI: \d+\.\d\d cm (high|low|\(centered\)) of POA$/);
+  assert.match($("lateral-label").textContent, /^Base POI: \d+\.\d\d cm (right|left|\(centered\)) of POA$/);
+
+  // Both dial cells are the full-height ones, and each carries a POI line.
+  const stacked = [...dom.window.document.querySelectorAll(".metrics > .metric.stacked")];
+  assert.equal(stacked.length, 2);
+  assert.deepEqual(stacked.map((cell) => cell.querySelector(".metric-label").id),
+    ["hold-label", "windage-label"]);
+  for (const cell of stacked) assert.equal(cell.querySelectorAll(".metric-detail").length, 2);
+
+  // The elevation cell's height and the chart's RISE/DROP describe the same
+  // separation, but not identically: the metric is the traced base flight while
+  // the chart extrapolates the uncorrected POI ray. Sign and wording must match
+  // and the magnitudes must agree to a millimetre, which catches any scale or
+  // sign error without demanding the two be the same measurement.
+  const readout = [...$("trajectory-chart").querySelectorAll(".back-readout-label")][0].textContent;
+  const wall = /^(RISE|DROP) · ([\d.]+) cm$/.exec(readout);
+  assert.ok(wall, readout);
+  const metric = /^Base POI: ([\d.]+) cm (high|low|\(centered\)) of POA$/.exec($("height-label").textContent);
+  assert.ok(metric, $("height-label").textContent);
+  assert.equal(metric[2], wall[1] === "RISE" ? "high" : "low");
+  assert.ok(Math.abs(Number(metric[1]) - Number(wall[2])) <= 0.1,
+    `metric ${metric[1]} cm and chart ${wall[2]} cm describe the same separation`);
+});
+
 test("the two simulated shots are labelled apart, and the group cone is reported", { skip: !data && "Run npm run extract for install integration checks" }, async (t) => {
   const { dom, close } = await mount(data, "shot-labels");
   t.after(close);
@@ -74,12 +118,19 @@ test("the two simulated shots are labelled apart, and the group cone is reported
   // The base flight time and the corrected impact are different measurements of
   // two different shots, and both are labelled so neither can be mistaken for
   // the plotted trajectory.
-  assert.match(dom.window.document.querySelector("#flight-time").closest(".metric").textContent, /BASE SHOT FLIGHT TIME[\s\S]*uncorrected/);
+  assert.match(dom.window.document.querySelector("#flight-time").closest(".metric").textContent, /SHOT FLIGHT TIME[\s\S]*corrected/);
   assert.match(dom.window.document.querySelector("#corrected-impact").closest(".metric").textContent, /CORRECTED IMPACT[\s\S]*corrected/);
   assert.match(dom.window.document.querySelector(".chart-heading h2").textContent, /^Corrected trajectory/);
   assert.match(dom.window.document.querySelector(".table-heading h2").textContent, /uncorrected/);
   assert.match(dom.window.document.querySelector(".table-note").textContent, /base shot.*corrected shot/s);
-  assert.notEqual($("flight-time").textContent, $("corrected-detail").textContent.split(" s")[0]);
+  // Flight time now belongs to the corrected shot, so it must match the
+  // corrected impact's own time rather than differ from it.
+  const correctedTime = /in ([\d.]+) s$/.exec($("corrected-detail").textContent);
+  assert.ok(correctedTime, $("corrected-detail").textContent);
+  assert.equal($("flight-time").textContent, correctedTime[1]);
+  // The range card stays on the base shot, where the two flight times can
+  // coincide numerically; what must hold is that the card still says so.
+  assert.match(dom.window.document.querySelector(".table-heading h2").textContent, /uncorrected/);
 
   // The cone is a bound on a random per-weapon draw, and says so.
   const detail = $("spread-detail").textContent;
@@ -87,8 +138,8 @@ test("the two simulated shots are labelled apart, and the group cone is reported
   assert.match(detail, /MOA bound/);
   assert.match(detail, /not a predicted group/);
   const readout = [...$("trajectory-chart").querySelectorAll(".back-readout-label")];
-  assert.equal(readout.length, 4);
-  assert.match(readout.at(-1).textContent, /^CONE · /);
+  assert.equal(readout.length, 5);
+  assert.match(readout.at(-2).textContent, /^CONE · /);
 });
 
 test("an uncertified weapon accuracy class widens the reported cone honestly", { skip: !data && "Run npm run extract for install integration checks" }, async (t) => {

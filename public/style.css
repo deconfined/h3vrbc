@@ -242,6 +242,22 @@ select {
   font-size: 12px;
   outline: none;
 }
+label.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  color: var(--text);
+  font-size: 11px;
+  cursor: pointer;
+}
+label.check input {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+}
 input:focus,
 select:focus,
 button:focus-visible,
@@ -367,6 +383,12 @@ select {
 }
 .metrics {
   display: grid;
+  /* The two dial adjustments hold the full height on the left; the four
+     measured figures form a 2x2 cluster beside them:
+       XYZZ
+       XYZZ
+     Rows stay content-sized, so the spanning cells simply stretch across both
+     of them. */
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 20px;
@@ -376,6 +398,13 @@ select {
   background: var(--panel);
   border-radius: 4px;
   padding: 16px;
+}
+.metric.stacked {
+  grid-row: span 2;
+  /* Fill the extra height rather than leaving a gap under the value. */
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
 }
 .metric.highlight {
   border-color: #6e5238;
@@ -649,6 +678,12 @@ footer {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
   }
+  /* Two columns cannot carry a two-row span, so the dial cells become ordinary
+     full-height cells and the cluster unwinds into a plain 2-wide grid. */
+  .metric.stacked {
+    grid-row: auto;
+    display: block;
+  }
   .metric {
     padding: 15px;
   }
@@ -820,6 +855,143 @@ footer {
   stroke: currentColor;
   stroke-width: 2;
 }
+/* The controls live in the chart's dead lower-right quadrant, stacked, rather
+   than in a row of their own above it. Measured against the rendered chart, the
+   region below and right of the trajectory is empty: the wall readout occupies
+   the top right, leaving roughly 520x160 px free at the bottom right. */
+.chart-frame {
+  position: relative;
+}
+.flight-controls {
+  position: absolute;
+  right: 20px;
+  bottom: 8px;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 172px;
+  padding: 9px 10px;
+  /* Just enough backing to stay legible where a narrow viewport squeezes the
+     plot under it. */
+  background: rgba(16, 21, 23, 0.82);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.flight-transport {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+}
+/* Buttons and dropdowns share one box so the group reads as a single control
+   family. The global input/select rule carries a 38px min-height and 9px/10px
+   padding meant for the setup form's full-width fields, which is what made these
+   two control types sit at different heights; height and padding are both set
+   explicitly here rather than inherited. */
+.flight-controls .secondary,
+#flight-rate,
+#reference-frame {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 26px;
+  min-height: 26px;
+  padding: 0 9px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text);
+  font: 10px/1 var(--mono);
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+  outline: none;
+}
+.flight-controls .secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+#flight-rate,
+#reference-frame {
+  /* Size to the widest option instead of filling the column. */
+  width: auto;
+  margin: 0;
+  padding-right: 4px;
+}
+.flight-controls .secondary:hover,
+#flight-rate:hover,
+#reference-frame:hover {
+  border-color: var(--accent);
+}
+.flight-controls .secondary:focus-visible,
+#flight-rate:focus-visible,
+#reference-frame:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* A label above its control, so there is no shared baseline to fall out of
+   alignment and the label can stay a proper small-caps field label. */
+.flight-field {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 3px;
+}
+.flight-field > label {
+  padding-left: 1px;
+  color: var(--muted);
+  font: 9px/1 var(--mono);
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+}
+.flight-clock {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font: 10px/1 var(--mono);
+  text-align: right;
+  white-space: nowrap;
+}
+#trajectory-chart {
+  cursor: crosshair;
+  touch-action: none;
+}
+/* Playback only ever starts from the transport buttons, so nothing moves on its
+   own. This keeps it that way if a future change restores autoplay: the marker
+   stays visible and static, and the scrub still works because it is a direct
+   manipulation rather than an animation. */
+@media (prefers-reduced-motion: reduce) {
+  .flight-marker-dot {
+    transition: none;
+  }
+}
+.flight-marker-dot {
+  fill: #e8b04b;
+  stroke: #1b1f23;
+  stroke-width: 1.5;
+}
+.flight-callout-panel {
+  fill: #141a1e;
+  fill-opacity: 0.9;
+  stroke: #e8b04b;
+  stroke-opacity: 0.45;
+  stroke-width: 1;
+}
+.flight-callout-leader {
+  stroke: #e8b04b;
+  stroke-opacity: 0.5;
+  stroke-width: 1;
+  stroke-dasharray: 2 3;
+}
+.flight-callout-line {
+  fill: var(--muted);
+  font: 9px var(--mono);
+}
+.flight-callout-key {
+  fill: #8d9aa1;
+}
+.flight-callout-value {
+  fill: #e8b04b;
+  font-weight: 600;
+}
 .dispersion-cone-fill {
   fill: #d8a657;
   fill-opacity: 0.13;
@@ -897,6 +1069,10 @@ footer {
 .back-cone-label,
 .back-cone-key {
   color: #d8a657;
+}
+.back-dial-label,
+.back-dial-key {
+  color: #8fb8d8;
 }
 .back-readout-heading {
   fill: var(--muted);

@@ -292,7 +292,7 @@ test("SVG shows three axes and a range endpoint without a target-range aim cross
   const axisLabels = [...svg.querySelectorAll(".chart-axis")].map((node) => node.textContent);
   for (const range of ["0", "75", "150", "225", "300"])
     assert.ok(axisLabels.includes(range), `Range-axis tick ${range} must remain visible`);
-  assert.equal(svg.querySelector(".back-readout-heading").textContent, "300 m / BACK WALL");
+  assert.equal(svg.querySelector(".back-readout-heading").textContent, "300 m / IMPACT PLANE");
   assert.equal(svg.querySelector(".aim-point, .impact-offset, .target-plane"), null);
   const [x, y] = layout.project(solution.correctedFlight.target);
   const target = svg.querySelector(".range-point");
@@ -414,7 +414,7 @@ test("a corrected chart never silently falls back to an uncorrected-only solutio
   assert.throws(() => chart(t, { ...solution, correctedFlight: undefined }), /simulated corrected flight/);
 });
 
-test("SVG places POA at the back-wall intersection and draws independent height and lateral offsets to corrected POI", (t) => {
+test("SVG places POA at the impact-plane intersection and draws independent height and lateral offsets to corrected POI", (t) => {
   const result = { ...solution, correctedFlight: { ...solution.correctedFlight,
     boreAngle: solution.boreAngle + 0.0003 } };
   const before = structuredClone(result);
@@ -428,7 +428,7 @@ test("SVG places POA at the back-wall intersection and draws independent height 
   assert.equal(Number(marker.dataset.rangeM), options.targetRange);
   close(Number(marker.dataset.heightCm), poa.height * 100);
   close(Number(marker.dataset.lateralCm), poa.lateral * 100);
-  assert.match(marker.querySelector("title").textContent, /Uncorrected POA on the back wall/);
+  assert.match(marker.querySelector("title").textContent, /Uncorrected POA on the impact plane/);
   const heightGuide = svg.querySelector(".back-height-offset");
   const lateralGuide = svg.querySelector(".back-lateral-offset");
   const [cx, cy] = layout.project(corner), [ix, iy] = layout.project(impact);
@@ -462,7 +462,7 @@ test("off-wall intersections remove the marker and both offset guides, including
     assert.equal(svg.querySelector(".back-height-label").textContent, layout.planeOffsets
       ? `DROP · ${Math.abs(layout.planeOffsets.height * 100).toFixed(2)} cm` : "RISE/DROP · —");
     assert.equal(svg.querySelector(".back-lateral-label").textContent, layout.planeOffsets ? "DRIFT · 0.00 cm" : "DRIFT · —");
-    assert.match(svg.querySelector("#chart-description").textContent, /no wall marker or offset guides/);
+    assert.match(svg.querySelector("#chart-description").textContent, /no plane marker or offset guides/);
     assert.ok(svg.querySelector(".range-point"), "Corrected impact remains visible");
   }
 });
@@ -484,9 +484,9 @@ test("wall measurements use a separate aligned gutter even for downward offsets 
       assert.ok(Number(label.getAttribute("x")) > wallRight + 20, "Labels must be beside, not on, the back wall");
       assert.ok(Number(label.getAttribute("x")) >= 760, "Even a reference extending beyond the wall cannot overlap the readout");
     }
-    assert.equal(svg.querySelectorAll(".back-readout-row").length, 4);
+    assert.equal(svg.querySelectorAll(".back-readout-row").length, 5);
     assert.equal(svg.querySelector(".back-error-label").textContent, "ERROR · —");
-    assert.equal(svg.querySelector(".back-readout-heading").textContent, "300 m / BACK WALL");
+    assert.equal(svg.querySelector(".back-readout-heading").textContent, "300 m / IMPACT PLANE");
   }
 });
 
@@ -573,4 +573,20 @@ test("the isometric chart applies both corrections while the range card retains 
   assert.ok(Math.abs(Number(correctedEndpoint.dataset.heightCm)) < 0.05);
   assert.ok(Math.abs(Number(correctedEndpoint.dataset.lateralCm)) < 0.05);
   assert.ok($("trajectory-chart").querySelector(".sight-line"), "The in-height part of the uncorrected ray remains visible");
+});
+
+test("the wall readout never enters the lower-right quadrant reserved for the flight controls", () => {
+  // The controls are an HTML overlay anchored to the container's bottom-right
+  // corner, because the SVG scales to its panel and that space cannot be
+  // addressed in SVG units. The readout is the only thing that could reach it,
+  // so its first row has to stay in the top of the gutter in every layout.
+  for (const points of [correctedPoints, [...correctedPoints, { range: 400, height: -18, lateral: 0.2 }]]) {
+    const layout = createIsometricLayout(points, 300);
+    const wallCenterY = layout.project({ range: 300, height: (layout.heightMin + layout.heightMax) / 2, lateral: 0 })[1];
+    const firstRowY = Math.max(84, Math.min(440 * 0.4, wallCenterY - 32));
+    // Four rows at 32px spacing: the last must clear the overlay's top edge.
+    assert.ok(firstRowY + 3 * 32 + 8 < 284,
+      `the last readout row sits at ${firstRowY + 3 * 32}, inside the reserved quadrant`);
+    assert.ok(firstRowY >= 84 && firstRowY + 3 * 32 < 440, "the readout must stay inside the viewBox");
+  }
 });

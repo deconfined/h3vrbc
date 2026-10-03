@@ -76,7 +76,7 @@ test("cant modes enable exactly one input and show compensated dials or fixed-di
   assert.match($("cant-result").textContent, /±5\.0°.*cm.*mrad.*displayed dials held fixed/);
   assert.equal($("cant-legend").hidden, false);
   assert.ok($("trajectory-chart").querySelector(".cant-envelope"));
-  assert.equal($("trajectory-chart").querySelectorAll(".back-readout-row").length, 4);
+  assert.equal($("trajectory-chart").querySelectorAll(".back-readout-row").length, 5);
   assert.match($("trajectory-chart").querySelector(".back-error-label").textContent, /^ERROR · ±[\d.]+ cm$/,
     "Actual cant uncertainty must be visible beside the wall, not only in explanatory text");
   assert.ok($("trajectory-chart").querySelector(".back-error-offset"));
