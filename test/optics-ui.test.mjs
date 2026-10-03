@@ -152,6 +152,156 @@ test("an unavailable saved optic rejects the snapshot without partially applying
   assert.match(restored.$("interface-status").textContent, /optic or direct weapon mount is no longer available/);
 });
 
+const savedFavorites = (cookieJar) => JSON.parse(decodeURIComponent(cookieJar.getCookiesSync("http://localhost/")
+  .find((cookie) => cookie.key === "h3vrbc_favorites").value)).favorites;
+
+test("named favorites restore optic view, mount, rail position and custom zero, and distinguish optical loadouts", async (t) => {
+  const cookieJar = new CookieJar();
+  const { $, dom, set, recalculate } = await controls(dataset, "optic-favorite-loadout", t, cookieJar);
+  $("favorites-consent").checked = true;
+  $("favorites-consent").dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  set("weapon", "Multiple", "change");
+  set("optic", optic.id, "change");
+  set("optic-mount", "1", "change");
+  set("optic-rail-position", "17.5");
+  set("zero-model", "calculated", "change");
+  set("zero-range", "275");
+  set("favorite-name", "Scoped at 275");
+  $("save-favorite").click();
+  const saved = savedFavorites(cookieJar)[0];
+  assert.equal(saved.opticId, optic.id);
+  assert.equal(saved.opticMountIndex, 1);
+  assert.equal(saved.opticRailPosition, 0.175);
+  assert.equal(saved.zeroModel, "calculated");
+  assert.equal(saved.zeroRange, 275);
+  assert.match($("favorite-summary").textContent, /Test Scope/);
+  assert.match($("favorite-summary").textContent, /275 m zero/);
+  set("zero-range", "300");
+  $("save-favorite").click();
+  assert.equal(savedFavorites(cookieJar).length, 2, "Different zero distances are different saved configurations");
+  set("optic", "Reflex:43", "change");
+  set("optic-mount", "1", "change");
+  set("optic-rail-position", "17.5");
+  set("zero-model", "calculated", "change");
+  set("zero-range", "275");
+  $("save-favorite").click();
+  assert.equal(savedFavorites(cookieJar).length, 3, "Changing only the optic must not replace the scoped favorite");
+  set("favorite-name", "Renamed reflex");
+  $("save-favorite").click();
+  assert.equal(savedFavorites(cookieJar).length, 3, "An identical optical configuration can still be renamed");
+  assert.equal(savedFavorites(cookieJar)[2].name, "Renamed reflex");
+  set("target-range", "600");
+  set("sight-height", "9");
+  set("optic-search", "Reflex");
+  set("favorite-select", saved.id, "change");
+  $("load-favorite").click();
+  assert.equal($("optic").value, optic.id);
+  assert.equal($("optic-search").value, "");
+  assert.equal($("optic-mount").value, "1");
+  assert.equal($("optic-rail-position").valueAsNumber, 17.5);
+  assert.equal($("zero-model").value, "calculated");
+  assert.equal($("zero-range").valueAsNumber, 275, "Restore the saved zero, not the prefab's default 100 m");
+  closeNumber($("sight-height").valueAsNumber, 5);
+  closeNumber($("sight-setback").valueAsNumber, 46.5);
+  assert.equal($("target-range").valueAsNumber, 600);
+  assert.equal($("solution").hidden, true);
+  assert.equal($("export-csv").disabled, true);
+  await recalculate();
+});
+
+test("manual-sight favorites restore their zero and clear an active optic; invalid saved fields do not overwrite cookies", async (t) => {
+  const cookieJar = new CookieJar();
+  const { $, dom, set } = await controls(dataset, "optic-favorite-manual", t, cookieJar);
+  $("favorites-consent").checked = true;
+  $("favorites-consent").dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  set("weapon", "Rifle", "change");
+  set("zero-model", "geometric", "change");
+  set("zero-range", "75");
+  $("target-range").value = "";
+  let invalidations = 0;
+  $("setup-form").addEventListener("invalid", () => invalidations++, true);
+  $("save-favorite").click();
+  assert.equal(invalidations, 0, "Saving does not trigger native validation of unrelated shot inputs");
+  const saved = savedFavorites(cookieJar)[0];
+  assert.equal(saved.opticId, "");
+  assert.equal(saved.opticMountIndex, null);
+  assert.equal(saved.opticRailPosition, null);
+  const previous = JSON.stringify(savedFavorites(cookieJar));
+  for (const value of ["", "0", "5001", "100.5"]) {
+    set("zero-range", value);
+    $("save-favorite").click();
+    assert.match($("favorite-status").textContent, /valid optic zero distance/);
+    assert.equal(JSON.stringify(savedFavorites(cookieJar)), previous);
+  }
+  set("optic", optic.id, "change");
+  set("optic-rail-position", "");
+  $("save-favorite").click();
+  assert.match($("favorite-status").textContent, /optic rail position/);
+  assert.equal(JSON.stringify(savedFavorites(cookieJar)), previous);
+  set("sight-height", "9");
+  set("favorite-select", saved.id, "change");
+  $("load-favorite").click();
+  assert.equal($("optic").value, "");
+  assert.equal($("optic-mount").value, "");
+  assert.equal($("optic-rail-position").disabled, true);
+  assert.equal($("zero-range").valueAsNumber, 75);
+  assert.equal($("zero-model").value, "geometric");
+  assert.equal($("sight-height").valueAsNumber, 9, "Manual sight measurements remain outside named favorites");
+});
+
+const legacyFavorite = { id: "legacy", name: "Legacy rifle", weaponId: "Rifle", chamberIndex: 0,
+  roundId: "556x45mmCartridgeFMJ", attachmentIds: [] };
+
+test("legacy favorites remain loadable without inventing or replacing their optic and zero setting", async (t) => {
+  const cookieJar = new CookieJar();
+  const payload = { version: 1, consent: true, favorites: [legacyFavorite] };
+  cookieJar.setCookieSync(`h3vrbc_favorites=${encodeURIComponent(JSON.stringify(payload))}; Path=/`, "http://localhost/");
+  const { $, set } = await controls(dataset, "optic-favorite-legacy", t, cookieJar);
+  set("weapon", "Multiple", "change");
+  set("optic", optic.id, "change");
+  set("optic-mount", "1", "change");
+  set("zero-range", "275");
+  set("zero-model", "calculated", "change");
+  set("favorite-select", legacyFavorite.id, "change");
+  assert.match($("favorite-summary").textContent, /Legacy setup: optic and zero not saved/);
+  assert.equal($("load-favorite").disabled, false);
+  $("load-favorite").click();
+  assert.equal($("weapon").value, "Rifle");
+  assert.equal($("optic").value, optic.id);
+  assert.equal($("zero-range").valueAsNumber, 275);
+  assert.equal($("zero-model").value, "calculated");
+  assert.deepEqual(savedFavorites(cookieJar), [legacyFavorite], "Loading does not rewrite old saved records");
+});
+
+test("unavailable saved optics and mounts cannot partially load or invalidate a current solution", async (t) => {
+  const base = { ...legacyFavorite, opticId: optic.id, opticMountIndex: 0, opticRailPosition: 0.5,
+    zeroModel: "game", zeroRange: 100 };
+  for (const [index, saved] of [
+    { ...base, opticId: "RemovedScope" },
+    { ...base, opticMountIndex: 99 },
+    { ...base, opticRailPosition: null },
+  ].entries()) {
+    await t.test(`unavailable optic setup ${index}`, async (t) => {
+      const cookieJar = new CookieJar();
+      cookieJar.setCookieSync(`h3vrbc_favorites=${encodeURIComponent(JSON.stringify({ version: 1, consent: true, favorites: [saved] }))}; Path=/`, "http://localhost/");
+      const { $, dom, set, recalculate } = await controls(dataset, `optic-favorite-unavailable-${index}`, t, cookieJar);
+      set("weapon", "Rifle", "change");
+      set("optic", "Reflex:43", "change");
+      set("zero-range", "200");
+      await recalculate();
+      set("favorite-select", saved.id, "change");
+      assert.equal($("load-favorite").disabled, true);
+      const values = () => [...$("setup-form").querySelectorAll("input[id], select[id]")].map((field) => [field.id, field.value, field.checked]);
+      const before = values();
+      $("load-favorite").dispatchEvent(new dom.window.Event("click", { bubbles: true }));
+      assert.deepEqual(values(), before);
+      assert.equal($("solution").hidden, false);
+      assert.equal($("export-csv").disabled, false);
+      assert.deepEqual(savedFavorites(cookieJar), [saved]);
+    });
+  }
+});
+
 let data;
 try {
   data = JSON.parse(await readFile(new URL("../public/data/h3vr.json", import.meta.url), "utf8"));

@@ -4,6 +4,7 @@ import { deviceKindLabel, muzzleGeometry, searchMuzzleDevices } from "./muzzle-d
 import { compatibleOpticMounts, opticGeometry, searchOptics, slidingOpticMount } from "./optics.js";
 import { createFavoriteStore } from "./favorites.js";
 import { createInterfaceStore } from "./interface-state.js";
+import { renderTrajectoryChart } from "./trajectory-chart.js";
 
 const $ = (id) => document.getElementById(id);
 const form = $("setup-form");
@@ -247,6 +248,8 @@ function interfaceProblem(state) {
     if (![...$(id).options].some((item) => item.value === values[id]))
       return "The remembered setup could not be restored: a selected setting is no longer available.";
   }
+  if (Object.hasOwn(values, "cant-mode") && ![...$("cant-mode").options].some((item) => item.value === values["cant-mode"]))
+    return "The remembered setup could not be restored: a selected cant mode is no longer available.";
   return null;
 }
 
@@ -293,6 +296,7 @@ function restoreInterface(state) {
   renderFavorites(values["favorite-select"]);
   showRoundFacts();
   showSimulationNote();
+  updateCantControls();
   for (const [id, open] of Object.entries(state.sections)) {
     const section = $(id);
     if (section?.tagName === "DETAILS") section.open = open;
@@ -333,6 +337,19 @@ function favoriteProblem(favorite) {
       return error.message;
     }
   }
+  if (favorite.opticId) {
+    const optic = opticById.get(favorite.opticId);
+    if (!optic) return "This favorite's optic is unavailable in the current game data.";
+    if (favorite.opticMountIndex !== null) {
+      const mount = weapon.sightMounts?.[favorite.opticMountIndex];
+      if (!mount || mount.type !== optic.mountType)
+        return "This favorite's direct optic mount is unavailable or no longer matches its optic.";
+      if (slidingOpticMount(mount) && !Number.isFinite(favorite.opticRailPosition))
+        return "This favorite needs a saved optic rail position.";
+      if (!slidingOpticMount(mount) && favorite.opticRailPosition !== null)
+        return "This favorite's saved rail position no longer matches its fixed optic mount.";
+    }
+  }
   return null;
 }
 
@@ -358,7 +375,13 @@ function renderFavorites(selectedId = $("favorite-select").value) {
       roundById.get(favorite.roundId).name,
       favorite.attachmentIds.length
         ? favorite.attachmentIds.map((id) => muzzleDeviceById.get(id).name).join(" → ")
-        : "Bare muzzle"].join(" · ")
+        : "Bare muzzle",
+      ...(Object.hasOwn(favorite, "opticId")
+        ? [favorite.opticId ? `${opticById.get(favorite.opticId).name} (${opticById.get(favorite.opticId).kind === "scope" ? "PIP scope" : "Reflex"})` : "Manual sight",
+          ...(favorite.opticMountIndex !== null ? [weaponById.get(favorite.weaponId).sightMounts[favorite.opticMountIndex].name] : []),
+          ...(favorite.opticRailPosition !== null ? [`${fmt(favorite.opticRailPosition * 100, 1)}% rail`] : []),
+          `${favorite.zeroRange} m zero · ${[...$("zero-model").options].find((item) => item.value === favorite.zeroModel).textContent.trim()}`]
+        : ["Legacy setup: optic and zero not saved"])].join(" · ")
     : favorites.length ? "Select a favorite to load or delete it." : "No saved setups yet.";
   scheduleInterfaceSave();
 }
@@ -371,11 +394,27 @@ function saveFavorite() {
     $("favorite-status").textContent = "Choose a weapon and a supported round before saving a favorite.";
     return;
   }
+  if (!$("zero-range").validity.valid) {
+    $("favorite-status").textContent = "Enter a valid optic zero distance (1–5000 m) before saving a favorite.";
+    return;
+  }
+  const optic = selectedOptic();
+  const mount = selectedOpticMount();
+  const railPosition = slidingOpticMount(mount) ? $("optic-rail-position").valueAsNumber / 100 : null;
+  if (slidingOpticMount(mount) && (!Number.isFinite(railPosition) || railPosition < 0 || railPosition > 1)) {
+    $("favorite-status").textContent = "Enter an optic rail position from 0% to 100% before saving a favorite.";
+    return;
+  }
   const setup = {
     weaponId: weapon.id,
     chamberIndex: Number($("weapon-chamber").value),
     roundId: round.id,
     attachmentIds: muzzleDevices.map((device) => device.id),
+    opticId: optic?.id ?? "",
+    opticMountIndex: optic && mount ? Number($("optic-mount").value) : null,
+    opticRailPosition: optic ? railPosition : null,
+    zeroModel: $("zero-model").value,
+    zeroRange: $("zero-range").valueAsNumber,
   };
   const problem = favoriteProblem(setup);
   if (problem) {
@@ -384,7 +423,9 @@ function saveFavorite() {
   }
   const existing = favorites.find((favorite) => favorite.weaponId === setup.weaponId
     && favorite.chamberIndex === setup.chamberIndex && favorite.roundId === setup.roundId
-    && JSON.stringify(favorite.attachmentIds) === JSON.stringify(setup.attachmentIds));
+    && JSON.stringify(favorite.attachmentIds) === JSON.stringify(setup.attachmentIds)
+    && ["opticId", "opticMountIndex", "opticRailPosition", "zeroModel", "zeroRange"]
+      .every((key) => favorite[key] === setup[key]));
   const name = $("favorite-name").value.trim() || `${weapon.name} · ${round.name}`.slice(0, 60);
   const favorite = {
     id: existing?.id ?? document.defaultView.crypto.randomUUID?.()
@@ -416,6 +457,12 @@ function loadFavorite() {
   }
   $("weapon-search").value = "";
   filterWeapons();
+  const hasOptic = Object.hasOwn(favorite, "opticId");
+  if (hasOptic) {
+    $("optic-search").value = "";
+    filterOptics();
+    $("optic").value = favorite.opticId;
+  }
   $("weapon").value = favorite.weaponId;
   muzzleDevices = [];
   $("muzzle-geometry-mode").value = "stock";
@@ -425,11 +472,21 @@ function loadFavorite() {
   filterRounds();
   $("ammunition").value = favorite.roundId;
   refreshOpticMounts();
+  if (hasOptic) {
+    $("optic-mount").value = favorite.opticMountIndex === null ? "" : String(favorite.opticMountIndex);
+    $("optic-rail-position").value = favorite.opticRailPosition === null ? "50" : favorite.opticRailPosition * 100;
+    showOpticMountControls();
+    applyOpticGeometry();
+    // Restore the saved setting, not the optic prefab's default zero distance.
+    $("zero-model").value = favorite.zeroModel;
+    $("zero-range").value = favorite.zeroRange;
+  }
   muzzleDevices = favorite.attachmentIds.map((id) => muzzleDeviceById.get(id));
   refreshMuzzleSetup(true);
   showRoundFacts();
   $("weapon-section").open = true;
   if (muzzleDevices.length) $("muzzle-section").open = true;
+  if (hasOptic && favorite.opticId) $("sight-section").open = true;
   $("favorite-status").textContent = `Loaded “${favorite.name}”. Review the setup and calculate a new solution.`;
   invalidate("Favorite loaded. Calculate to update the firing solution.");
 }
@@ -760,6 +817,14 @@ function filterRounds(preserveSelected = false) {
   invalidate();
 }
 
+function updateCantControls() {
+  const mode = $("cant-mode").value;
+  $("cant-angle-group").hidden = mode !== "specific";
+  $("cant-angle").disabled = mode !== "specific";
+  $("cant-tolerance-group").hidden = mode !== "uncertainty";
+  $("cant-tolerance").disabled = mode !== "uncertainty";
+}
+
 function readOptions() {
   const values = new FormData(form);
   const scene = data.scenes.find((item) => item.file === $("scene").value);
@@ -790,6 +855,9 @@ function readOptions() {
     muzzleForwardShift: geometry.forwardShift,
     muzzleUpShift: geometry.upShift,
     inclinationDegrees: Number(values.get("inclinationDegrees")),
+    cantMode: values.get("cantMode"),
+    cantDegrees: values.get("cantMode") === "specific" ? Number(values.get("cantDegrees")) : 0,
+    cantToleranceDegrees: values.get("cantMode") === "uncertainty" ? Number(values.get("cantToleranceDegrees")) : 0,
     caliber: caliberById.get(selectedRound().caliberId),
     zeroModel: values.get("zeroModel"),
     zeroRange: Number(values.get("zeroRange")),
@@ -809,147 +877,23 @@ function readOptions() {
   };
 }
 
-const SVG_NS = "http://www.w3.org/2000/svg";
-function svgElement(type, attributes, text) {
-  const element = document.createElementNS(SVG_NS, type);
-  for (const [key, value] of Object.entries(attributes))
-    element.setAttribute(key, value);
-  if (text !== undefined) element.textContent = text;
-  return element;
-}
-
 function renderChart(solution, options, round) {
-  const chart = $("trajectory-chart");
-  const title = svgElement(
-    "title",
-    { id: "chart-title" },
-    `${round.name}: trajectory at ${options.zeroRange} m optic setting, ${fmt(options.inclinationDegrees, 1)}° firing angle`,
-  );
-  const description = svgElement(
-    "desc",
-    { id: "chart-description" },
-    `At ${options.targetRange} meters along the ${fmt(options.inclinationDegrees, 1)}° sight line, perpendicular height offset is ${fmt(solution.target.height * 100)} cm. The optic setting is not an imposed trajectory crossing.`,
-  );
-  chart.replaceChildren(title, description);
-  const left = 62,
-    top = 20,
-    width = 716,
-    height = 232;
-  const min = Math.min(0, ...solution.points.map((point) => point.height));
-  const max = Math.max(0, ...solution.points.map((point) => point.height));
-  const padding = Math.max((max - min) * 0.13, 0.025);
-  const bottom = min - padding;
-  const upper = max + padding;
-  const px = (range) => left + (range / options.targetRange) * width;
-  const py = (value) => top + ((upper - value) / (upper - bottom)) * height;
-  for (let i = 0; i <= 4; i++) {
-    const range = (options.targetRange * i) / 4;
-    const value = bottom + ((upper - bottom) * i) / 4;
-    chart.append(
-      svgElement("line", {
-        x1: px(range),
-        x2: px(range),
-        y1: top,
-        y2: top + height,
-        class: "chart-grid",
-      }),
-    );
-    chart.append(
-      svgElement("line", {
-        x1: left,
-        x2: left + width,
-        y1: py(value),
-        y2: py(value),
-        class: "chart-grid",
-      }),
-    );
-    chart.append(
-      svgElement(
-        "text",
-        {
-          x: px(range),
-          y: top + height + 23,
-          "text-anchor": "middle",
-          class: "chart-axis",
-        },
-        fmt(range, 0),
-      ),
-    );
-    chart.append(
-      svgElement(
-        "text",
-        {
-          x: left - 10,
-          y: py(value) + 4,
-          "text-anchor": "end",
-          class: "chart-axis",
-        },
-        fmt(value * 100, 1),
-      ),
-    );
-  }
-  chart.append(
-    svgElement("text", { x: left, y: 10, class: "chart-axis" }, "HEIGHT / cm"),
-  );
-  chart.append(
-    svgElement("line", {
-      x1: left,
-      x2: left + width,
-      y1: py(0),
-      y2: py(0),
-      class: "sight-line",
-    }),
-  );
-  const path = solution.points
-    .map(
-      (point, index) =>
-        `${index ? "L" : "M"}${fmt(px(point.range), 3)},${fmt(py(point.height), 3)}`,
-    )
-    .join(" ");
-  chart.append(svgElement("path", { d: path, class: "trajectory" }));
-  if (
-    solution.settingRange !== null &&
-    solution.settingRange <= options.targetRange
-  ) {
-    chart.append(
-      svgElement("line", {
-        x1: px(solution.settingRange),
-        x2: px(solution.settingRange),
-        y1: top,
-        y2: top + height,
-        class: "setting-line",
-      }),
-    );
-    chart.append(
-      svgElement(
-        "text",
-        {
-          x: px(solution.settingRange) + 6,
-          y: top + 12,
-          class: "setting-label",
-        },
-        options.zeroModel === "calculated" ? "TRUE ZERO" : "OPTIC SETTING",
-      ),
-    );
-  }
-  chart.append(
-    svgElement("circle", {
-      cx: px(options.targetRange),
-      cy: py(solution.target.height),
-      r: 4,
-      class: "target-point",
-    }),
-  );
+  renderTrajectoryChart($("trajectory-chart"), solution, options, round);
 }
 
 function render(solution, options, round) {
-  $("hold-value").textContent = fmt(solution.target.elevationMrad, 3);
+  const tiltedDials = options.cantMode === "specific" && options.cantDegrees !== 0;
+  // Scope/reticle settings are the inverse of the solved weapon aim changes.
+  // Do not invert the launch angles, range card, or CSV's aim corrections.
+  const scopeSetting = tiltedDials ? "scope setting (weapon axis)" : "scope setting";
+  const scopeValue = (value, digits) => fmt(Number(fmt(-value, digits)), digits);
+  $("hold-value").textContent = scopeValue(solution.target.elevationMrad, 3);
   $("hold-secondary").textContent =
-    `${fmt(solution.target.elevationMoa, 2)} MOA · ${solution.target.elevationMrad >= 0 ? "raise aim" : "lower aim"}`;
-  $("windage-value").textContent = fmt(solution.target.windageMrad, 3);
+    `${scopeValue(solution.target.elevationMoa, 2)} MOA · ${Math.abs(solution.target.elevationMrad) < 0.0000001 ? "no elevation adjustment" : scopeSetting}`;
+  $("windage-value").textContent = scopeValue(solution.target.windageMrad, 3);
   $("windage-secondary").textContent =
-    `${fmt(solution.target.windageMoa, 2)} MOA · ${Math.abs(solution.target.windageMrad) < 0.0000001 ? "no lateral correction" : solution.target.windageMrad > 0 ? "aim right" : "aim left"}`;
-  $("lateral-label").textContent = `Current POI: ${directional(solution.target.lateral * 100, "cm", "right", "left", 2)} of POA`;
+    `${scopeValue(solution.target.windageMoa, 2)} MOA · ${Math.abs(solution.target.windageMrad) < 0.0000001 ? "no windage adjustment" : scopeSetting}`;
+  $("lateral-label").textContent = `Base POI: ${directional(solution.target.lateral * 100, "cm", "right", "left", 2)} of POA`;
   $("flight-time").textContent = fmt(solution.target.time, 3);
   $("target-label").textContent =
     `${options.targetRange} m along sight line · ${fmt(options.inclinationDegrees, 1)}°`;
@@ -959,7 +903,16 @@ function render(solution, options, round) {
   $("zero-label").textContent =
     options.zeroModel === "unadjusted"
       ? "No base zero adjustment · bore 0° relative to sight"
-      : `${options.zeroModel === "calculated" ? "Calculated zero" : "Optic setting"} ${options.zeroRange} m · bore ${fmt((solution.boreAngle * 180) / Math.PI, 3)}° relative to sight`;
+      : `${options.zeroModel === "calculated" ? "Calculated base zero" : "Base optic setting"} ${options.zeroRange} m · bore ${fmt((solution.boreAngle * 180) / Math.PI, 3)}° relative to sight`;
+  const uncertainty = solution.cantUncertainty;
+  $("cant-result").hidden = options.cantMode === "none";
+  $("cant-result").classList.toggle("cant-warning", Boolean(uncertainty && !uncertainty.complete));
+  $("cant-legend").hidden = !uncertainty?.complete;
+  $("cant-result").textContent = options.cantMode === "specific"
+    ? `Specific cant ${fmt(options.cantDegrees, 1)}° (${options.cantDegrees > 0 ? "right" : options.cantDegrees < 0 ? "left" : "level"}) is compensated in the solution. Elevation/windage dials use the weapon's tilted axes.`
+    : uncertainty?.complete
+      ? `Cant uncertainty ±${fmt(uncertainty.toleranceDegrees, 1)}°: lateral POI ${fmt(uncertainty.target.lateralMin * 100)} to ${fmt(uncertainty.target.lateralMax * 100)} cm (${fmt(uncertainty.target.lateralMinMrad, 3)} to ${fmt(uncertainty.target.lateralMaxMrad, 3)} mrad from aim); height ${fmt(uncertainty.target.heightMin * 100)} to ${fmt(uncertainty.target.heightMax * 100)} cm. ${uncertainty.samples.length} sampled angles with the displayed dials held fixed; not a statistical confidence interval.`
+      : uncertainty ? `Cant uncertainty cannot be bounded at this range: sampled angles ${uncertainty.unreachableAngles.map((angle) => fmt(angle, 1)).join(", ")}° exceed the projectile or scene limits. The nominal solution remains valid; no partial uncertainty band is shown.` : "";
   $("range-rows").replaceChildren();
   for (const row of solution.rows) {
     const tr = document.createElement("tr");
@@ -1054,7 +1007,7 @@ async function start() {
   $("first-step").value = data.settings.fixedDeltaTime * 1000;
   $("build-tag").textContent = `120p3 / ${data.rounds.length} supported rounds`;
   $("model-details").textContent =
-    "Gravity before drag; global Mach-dependent drag curve; area from projectile diameter; displacement scaled by the flight multiplier. Single-precision state updates and unweighted Hermite curve interpolation. Time/speed and POI offsets refer to the current optic setting; elevation and windage are the separately solved two-axis low-angle aim corrections. Ordered muzzle devices apply game-derived fixed launch bias, not a lateral free-flight force. Stock mount geometry changes the spawn point, velocity-curve distance and effective sight geometry. Speed is the internal velocity state before displacement scaling. Optic distance remains independent of the selected ammunition class.";
+    "Gravity before drag; global Mach-dependent drag curve; area from projectile diameter; displacement scaled by the flight multiplier. Single-precision state updates and unweighted Hermite curve interpolation. Range-card time/speed and POI offsets refer to the base optic setting; elevation and windage are the separately solved two-axis low-angle aim corrections. The chart separately simulates the corrected launch for the selected range. Ordered muzzle devices apply game-derived fixed launch bias, not a lateral free-flight force. Stock mount geometry changes the spawn point, velocity-curve distance and effective sight geometry. Speed is the internal velocity state before displacement scaling. Optic distance remains independent of the selected ammunition class.";
   $("provenance").textContent =
     `Unity ${data.source.unityVersion}. Assembly SHA-256: ${data.source.assemblySha256}. ${data.calibers.length} caliber curves; ${data.scenes.length} scene presets; numeric parameters extracted locally from ${data.source.inputs.length} source files.`;
   $("excluded-summary").textContent =
@@ -1073,10 +1026,12 @@ async function start() {
   const savedInterface = favoritesEnabled ? interfaceStore.read() : null;
   const restoredInterface = savedInterface && restoreInterface(savedInterface);
   showRoundFacts();
+  updateCantControls();
   form.addEventListener("submit", runCalculation);
   form.addEventListener("input", (event) => {
     if (event.target.closest("#favorites-section")) return;
     if (["ammo-search", "weapon-search", "muzzle-search", "muzzle-kind", "muzzle-device", "optic-search"].includes(event.target.id)) return;
+    if (event.target.id === "cant-mode") updateCantControls();
     if (event.target.id === "optic-rail-position") applyOpticGeometry();
     if (["sight-height", "sight-setback"].includes(event.target.id)) showOpticNote();
     if (event.target.id === "shot-charge") {
@@ -1110,6 +1065,9 @@ async function start() {
       invalidate();
     } else if (event.target.id === "optic-rail-position") {
       applyOpticGeometry();
+      invalidate();
+    } else if (event.target.id === "cant-mode") {
+      updateCantControls();
       invalidate();
     } else if (event.target.id === "muzzle-geometry-mode") {
       refreshMuzzleSetup(true);

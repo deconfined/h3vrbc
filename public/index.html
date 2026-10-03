@@ -38,7 +38,7 @@
                     <span>Allow cookies to remember my interface and favorite setups</span>
                   </label>
                   <fieldset id="favorites-controls" class="favorite-controls" aria-label="Manage favorite setups" hidden disabled>
-                    <p class="field-note">Save a weapon, its muzzle devices in order, and a round. Sight, range and manual overrides are not saved.</p>
+                    <p class="field-note">Save a weapon, its muzzle devices in order, a round, the optic with its mount/rail position, and the zero rule/distance. Target range and manual overrides are not saved.</p>
                     <label for="favorite-name">Setup name <span>optional</span></label>
                     <input id="favorite-name" type="text" maxlength="60" placeholder="Use weapon and round names" autocomplete="off" />
                     <button id="save-favorite" class="secondary" type="button" disabled>Save current setup</button>
@@ -229,7 +229,7 @@
                       <input id="optic-rail-position" type="number" value="50" min="0" max="100" step="any" disabled />
                       <p class="field-note">Defaults to the assumed midpoint (50%). 0% is the rear endpoint; 100% is the front. Adjust to match your actual mounting position.</p>
                     </div>
-                    <p class="field-note">Forward-facing, uncanted direct mounting only. Matching mount types does not check collisions or occupied slots. Adapters, risers and reversed mounting require manual geometry.</p>
+                    <p class="field-note">Forward-facing direct mounting, with no optic cant relative to the weapon. Whole-weapon cant is set below. Matching mount types does not check collisions or occupied slots. Adapters, risers and reversed mounting require manual geometry.</p>
                   </div>
                   <p class="field-note" id="optic-note" role="status"></p>
                   <button id="restore-optic" class="secondary" type="button" hidden>Restore optic defaults</button>
@@ -303,6 +303,23 @@
                     optic-zero adjustment; elevation corrections are relative
                     to this sight line.
                   </p>
+                  <label for="cant-mode">Weapon cant</label>
+                  <select id="cant-mode" name="cantMode" aria-describedby="cant-note" required>
+                    <option value="none">No cant</option>
+                    <option value="specific">Specific cant — compensate in solution</option>
+                    <option value="uncertainty">Cant uncertainty — ± tolerance</option>
+                  </select>
+                  <div id="cant-angle-group" hidden>
+                    <label for="cant-angle">Specific weapon cant <span>°</span></label>
+                    <input id="cant-angle" name="cantDegrees" type="number" value="0" min="-90" max="90" step="any" required disabled />
+                    <p class="field-note">Viewed through the optic: positive tilts weapon-up right, negative tilts it left. This fixed cant is included when solving elevation and windage.</p>
+                  </div>
+                  <div id="cant-tolerance-group" hidden>
+                    <label for="cant-tolerance">Accidental cant tolerance <span>± °</span></label>
+                    <input id="cant-tolerance" name="cantToleranceDegrees" type="number" value="5" min="0" max="90" step="any" required disabled />
+                    <p class="field-note">Nominal cant is 0°. Samples tilts across this interval without changing the nominal dial settings. Shows a geometric uncertainty envelope, not a statistical confidence interval.</p>
+                  </div>
+                  <p class="field-note" id="cant-note">Specific cant and cant uncertainty are mutually exclusive. These are assumed inputs; the calculator cannot detect live weapon cant.</p>
                   <div class="input-pair">
                     <div>
                       <label for="target-range">Target sight-line range <span>m</span></label>
@@ -400,8 +417,8 @@
           <div id="solution">
             <div class="metrics" aria-live="polite">
               <div class="metric highlight">
-                <span class="metric-label" id="hold-label"
-                  >TARGET ELEVATION</span
+                <span class="metric-label" id="hold-label" title="Scope adjustment from the base zero: the inverse of the solved aim correction."
+                  >ELEVATION ADJUSTMENT</span
                 >
                 <div>
                   <strong id="hold-value">—</strong
@@ -410,7 +427,7 @@
                 <span id="hold-secondary" class="metric-detail">—</span>
               </div>
               <div class="metric">
-                <span class="metric-label">TARGET WINDAGE</span>
+                <span class="metric-label" id="windage-label" title="Scope adjustment from the base zero: the inverse of the solved aim correction.">WINDAGE ADJUSTMENT</span>
                 <div>
                   <strong id="windage-value">—</strong><span class="metric-unit">mrad</span>
                 </div>
@@ -418,7 +435,7 @@
                 <span id="lateral-label" class="metric-detail">—</span>
               </div>
               <div class="metric">
-                <span class="metric-label">TIME OF FLIGHT</span>
+                <span class="metric-label">BASE FLIGHT TIME</span>
                 <div>
                   <strong id="flight-time">—</strong
                   ><span class="metric-unit">s</span>
@@ -437,28 +454,74 @@
             <div class="panel chart-panel">
               <div class="chart-heading">
                 <div>
-                  <p class="eyebrow">FREE FLIGHT</p>
-                  <h2>Trajectory relative to sight line</h2>
+                  <p class="eyebrow">FREE FLIGHT / ISOMETRIC 2.5D</p>
+                  <h2>Corrected trajectory</h2>
                 </div>
                 <div class="legend">
-                  <span class="legend-line"></span>Projectile
-                  <span class="legend-dash"></span>Sight line
+                  <span class="legend-item">
+                    <span class="legend-line" aria-hidden="true"></span>Corrected flight
+                  </span>
+                  <span class="legend-item">
+                    <span class="legend-dash" aria-hidden="true"></span>Uncorrected POA
+                  </span>
+                  <span class="legend-item">
+                    <span class="legend-shadow" aria-hidden="true"></span>Plane projection
+                  </span>
+                  <span class="legend-item" id="cant-legend" hidden>
+                    <span class="legend-cant" aria-hidden="true"></span>Cant uncertainty
+                  </span>
                 </div>
               </div>
-              <svg
-                id="trajectory-chart"
-                viewBox="0 0 800 300"
-                role="img"
-                aria-labelledby="chart-title chart-description"
+              <p class="cant-result" id="cant-result" role="status" hidden></p>
+              <div
+                class="chart-scroll"
+                tabindex="0"
+                role="region"
+                aria-label="Isometric trajectory chart and back-wall measurements; scroll horizontally on narrow screens"
               >
-                <title id="chart-title">Projectile trajectory</title>
-                <desc id="chart-description">
-                  Projectile offset perpendicular to the selected sight line.
-                </desc>
-              </svg>
+                <svg
+                  id="trajectory-chart"
+                  viewBox="0 0 1040 440"
+                  role="img"
+                  aria-labelledby="chart-title chart-description"
+                >
+                  <title id="chart-title">Corrected projectile trajectory</title>
+                  <desc id="chart-description">
+                    Isometric view of range, height and lateral offset relative
+                    to the sight line after applying aim corrections, with an
+                    uncorrected point-of-aim reference ray.
+                  </desc>
+                </svg>
+              </div>
+              <p class="chart-note">
+                The projectile path is simulated after applying the solved aim
+                corrections. The scope adjustments above use the opposite signs.
+                The straight dashed ray is the
+                original, uncorrected POA at the base optic setting, rotated
+                with the weapon into the corrected view. It is not the
+                zero-offset corrected aim axis. Its base-zero marker is a
+                reference, not the corrected shot's target. An on-wall POA marker
+                and separate height/lateral guides show its distance from corrected
+                impact; off-wall intersections get neither marker nor guides.
+                RISE or DROP, DRIFT and ERROR are shown beside the back wall in the
+                same colors as their measurement lines. RISE means impact above
+                uncorrected POA; DROP means below. These and DRIFT are
+                geometric offsets, not dial settings. ERROR is lateral cant
+                uncertainty in cm; ± gives the error on each side, not total width.
+                When enabled, the purple band shows sampled accidental-cant
+                uncertainty with the displayed dials held fixed.
+                Only the ray extends if the zero is beyond the selected range.
+                The height ceiling is the plotted projectile apex; the POA ray
+                and base-zero marker are clipped to this height range rather than
+                stretching it. An arrowhead at the clipped ray end indicates
+                that the POA continues off the plot. Off-wall distances remain
+                in the side readout.
+                Height/lateral scales are exaggerated;
+                the grid is the corrected sight plane, not terrain.
+              </p>
               <div class="chart-footer">
                 <span id="zero-label">—</span
-                ><span>Sight-line range · meters</span>
+                ><span>Corrected sight-line range · meters</span>
               </div>
             </div>
             <div class="panel table-panel">
@@ -473,11 +536,19 @@
               </div>
               <p class="table-note">
                 Positive elevation: raise aim. Negative elevation: lower aim.
+                With specific cant, elevation/windage adjustments use the
+                weapon's tilted axes, not the chart's height/lateral axes.
                 Positive lateral POI: right of aim; negative: left. Windage is
                 the correction, so positive means aim right and negative means
                 aim left. Range is measured along the sight line. Height is the
-                offset perpendicular to it, not world-vertical height. The chart
-                shows vertical trajectory only; lateral POI is in this card.
+                offset perpendicular to it, not world-vertical height. These are
+                aim corrections, with the opposite signs to the scope adjustments
+                above. The range card shows offsets, time and speed at the base optic
+                setting, before correction. Elevation and windage are the solved
+                adjustments; the isometric chart shows the resulting corrected
+                flight. Cant uncertainty keeps this nominal range card unchanged;
+                the purple band and summary show corrected POI uncertainty at the
+                selected range.
               </p>
               <div class="table-scroll">
                 <table>
@@ -542,7 +613,7 @@
           </p>
           <p>
             Sight geometry assumes a centered, bore-aligned optic with no
-            elevation/windage dial trim or cant. Enter optical-origin height and
+            initial elevation/windage dial trim. Enter optical-origin height and
             setback relative to the bare weapon muzzle, not the outer lens
             position. Selected device geometry supplies the change to the active
             muzzle; the model and CSV use the resulting effective values. Nominal optic
@@ -555,6 +626,17 @@
             catch-height and world-height limits still apply to inclined shots.
             Random range extension is set to its minimum; tables show primary centerline
             flight only, not spread or submunition paths.
+          </p>
+          <p>
+            Weapon cant rolls the centered weapon/optic setup about the sight
+            ray; positive cant tilts weapon-up right as viewed through the optic.
+            Specific cant is included in the two-axis solve. Alternatively, cant
+            uncertainty samples 21 angles across a nonzero ± tolerance around
+            a level nominal setup, keeping its solved dials fixed. The purple
+            envelope shows sampled geometric variation, not random spread or a
+            statistical confidence interval. If any sampled tilt cannot reach
+            the range, no partial band is shown. Cant is assumed, not measured
+            from the game.
           </p>
           <p>
             The modern scope rule assumes factory base zero is enabled

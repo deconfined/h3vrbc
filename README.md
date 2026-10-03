@@ -96,14 +96,32 @@ The left menu has independently expandable sections:
 1. **Simulation:** choose a scene, projectile limit, and gravity mode. Timing and world-height inputs are available under the advanced controls.
 2. **Weapon & ammunition:** search for a weapon and supported round. Select a chamber/barrel for multi-chamber weapons and set charge for supported sticky shots. Weapon presets fill verified geometry and firing multipliers.
 3. **Muzzle devices:** search suppressors, brakes, extenders, and other devices, then add them to the loadout. Match the game's registration order using Earlier/Later controls. Stock geometry treats this as an inner-to-outer mount chain.
-4. **Sight & range:** choose an optic preset and a matching direct weapon mount to fill sight geometry and the authored default zero setting, or enter values manually. Sliding rails default to an **assumed midpoint (50%)**, adjustable from rear (0%) to front (100%). Sight height and setback describe the **bare weapon muzzle**; device geometry supplies the effective adjustment. Set firing angle, target range, and range-card interval.
+4. **Sight & range:** choose an optic preset and a matching direct weapon mount to fill sight geometry and the authored default zero setting, or enter values manually. Sliding rails default to an **assumed midpoint (50%)**, adjustable from rear (0%) to front (100%). Sight height and setback describe the **bare weapon muzzle**; device geometry supplies the effective adjustment. Set firing angle, weapon cant mode, target range, and range-card interval.
 5. **Manual overrides:** supply missing values or adjust geometry and velocity multipliers for your setup.
 
 Click **Calculate solution** after changing the firing setup. Changes invalidate the previous solution and CSV export. Browsing weapon or device candidates and opening or closing sections preserve the current calculation.
 
-The chart shows vertical trajectory. The target summary, range card, and **Export CSV** include lateral point of impact and windage. Positive elevation means raise aim; positive windage means aim right. Positive lateral point of impact means the projectile is right of the aim point.
+The **isometric 2.5D chart** shows the projectile flight **after applying the solved elevation and windage aim corrections** for the selected range. It is separately simulated with the corrected launch angles, bringing impact onto aim within numerical tolerance. The chart's zero-offset axis is **corrected aim**. The straight dashed **uncorrected POA** ray is the original optic ray with no additional dial adjustments, rotated with the weapon into that corrected sight frame. Its direction uses the full base-to-corrected pitch/yaw rotation, not the corrected aim axis or a line drawn through corrected impact. Its **base-zero** reference rotates with it and can extend beyond a shorter selected shot range; only the reference extends, not the computed projectile flight. The ray is clipped to the projectile height range, and the zero marker is shown only when its actual height fits that range, never moved onto its boundary. The marker labels the entered zero setting, while its position is projected into the corrected sight frame.
+
+The projectile endpoint marks the selected distance, not a target object. The game's nominal base zero does not guarantee a crossing for the uncorrected flight; **Calculated zero** does. Neither requires the corrected flight to cross at the base-zero distance when solving for a different range. Height and lateral scales are independently exaggerated and automatically scaled, not a to-scale scene. The height ceiling is the **highest plotted projectile sample**, including cant probes when enabled; the uncorrected POA cannot stretch it upward. Flat flight keeps a finite height span below the zero-height sight plane. The grid represents that **corrected sight plane**, not terrain; the blue dashed plane projection shows the corrected flight's lateral displacement. Range/lateral bounds still account for the rotated optic reference. On narrow screens, scroll the chart horizontally.
+
+When the uncorrected ray intersects the displayed back wall at the selected range, a separate POA marker and L-shaped height/lateral guides show its separation from corrected impact. Both legs remain on that plane. A readout **beside** the wall shows **RISE** when corrected impact is above or level with uncorrected POA, or **DROP** when below, alongside **DRIFT** and **ERROR**, color-coded to their measurement lines. Height/lateral values are geometric distance magnitudes in centimetres, not elevation/windage dial settings; tooltips give signed changes toward corrected POI. ERROR gives sampled lateral cant uncertainty in cm: **± is per side**, while asymmetric left/right bounds are listed separately. Its purple width ruler sits below the impact region on the wall to avoid masking the lateral guide. Off-wall intersections get no marker or offset guides, but their actual plane distances remain in the side readout. Missing finite forward intersections show **—**. Disabled uncertainty also shows **—**, and incomplete uncertainty shows **UNBOUNDED**, never a misleading zero width.
+
+The top **ELEVATION ADJUSTMENT** and **WINDAGE ADJUSTMENT** callouts give the required scope/reticle setting changes from the base zero in mrad and MOA. Their signs are **the inverse of the solved aim corrections**, not instructions to raise/lower aim. With specific cant, they use the weapon's tilted elevation/windage axes.
+
+The range card and **Export CSV** retain the **uncorrected** offsets, time and speed at the base optic setting, alongside the original aim corrections: positive elevation means raise aim; positive windage means aim right. Positive lateral point of impact means the uncorrected projectile is right of the aim point in the unrolled sight frame. The solver, corrected flight, and CSV range-card signs/columns remain unchanged; metadata also records cant assumptions and selected-range uncertainty bounds.
 
 For unverified mounting, choose measured muzzle geometry, enter the mounted distance and forward/up shifts, and confirm them before calculating. Selecting a device does not establish physical compatibility with the weapon.
+
+### Weapon cant
+
+Choose one mutually exclusive mode under **Sight & range**:
+
+- **No cant** (default): a level weapon, with no cant uncertainty.
+- **Specific cant:** enter a signed angle from −90° to +90°. Positive tilts weapon-up **right**, negative **left**, viewed through the optic. The solve compensates that fixed cant in both weapon-local dial axes; the corrected flight still reaches aim within solver tolerance. Game-authored base zero stays weapon-local; **Calculated zero** solves a crossing at the chosen cant.
+- **Cant uncertainty:** enter a tolerance from 0° to 90°. Nominal cant is 0°. The calculator samples 21 evenly spaced angles across **± tolerance**, including zero and both endpoints, without re-solving the displayed nominal dials. A purple flight envelope and impact-width marker show the resulting corrected POI variation; the summary gives lateral bounds in **cm and mrad**, plus height bounds in cm. Zero tolerance uses just the nominal shot.
+
+The envelope is a **sampled geometric approximation**, not a probability distribution, confidence interval, or guaranteed continuous worst-case bound. If any sampled tilt cannot reach the selected range, the nominal solution remains available with a warning, and no partial uncertainty band is displayed. Cant can cause error even at the base zero. These inputs assume weapon roll about the sight ray; they do not detect live VR cant. See [cant model notes](docs/weapon-cant.md).
 
 ### Optic defaults
 
@@ -113,7 +131,7 @@ Choose a weapon, optic and direct mount. A unique matching mount is selected aut
 
 PIP geometry uses the game's optical origin, including its clamped rear-lens camera offset, rather than guessing from the mesh or lens. Reflex geometry uses the first reticle renderer's transform. PIP optics with disabled base zero select **No base zero adjustment** without forcing the required range input to zero. Positive authored zero distances are suggested in the zero-setting input.
 
-Defaults assume forward-facing, uncanted, centered **direct** mounting with no dial trim. Unsupported/off-axis geometry, missing direct mounts, custom muzzle references and extendable telescope geometry leave height/setback blank with an explanation. Adapters, risers, magnifier/clip-on combinations, occupied mounts, physical collisions and live animation poses are not composed or verified. Manual geometry remains available where the centered model is appropriate.
+Defaults assume forward-facing, centered **direct** mounting with no optic cant relative to the weapon and no dial trim. Whole-weapon cant is a separate shooting-condition input. Unsupported/off-axis geometry, missing direct mounts, custom muzzle references and extendable telescope geometry leave height/setback blank with an explanation. Adapters, risers, magnifier/clip-on combinations, occupied mounts, physical collisions and live animation poses are not composed or verified. Manual geometry remains available where the centered model is appropriate.
 
 For example, **M4 Carbine + Scope ACOG 4×32** at the top rail midpoint gives approximately **6.989 cm sight height** and **56.565 cm optic setback**, with a default **100 m** optic setting. These are source-derived defaults, not real-firearm measurements or a live-VR validation. See [optic extraction and geometry notes](docs/optics.md).
 
@@ -123,11 +141,11 @@ Storage is **off by default**. In **Saved setups & preferences**, explicitly ena
 
 With storage enabled:
 
-- **Named favorites** save the weapon, selected chamber, ordered muzzle devices, and round. Sight, range, and manual overrides are outside the named favorite. You can save, load, rename an identical combination by saving it again, or delete a favorite.
-- **The active interface** is saved automatically, including calculation inputs, optic/view and direct-mount selections, rail position, manual overrides and geometry confirmation, searches and filters, favorite controls, open sections, and page/sidebar/range-table scroll positions.
+- **Named favorites** save the weapon, selected chamber, ordered muzzle devices, round, selected optic/view, direct optic mount and rail position, and zeroing rule/distance. Target range, cant mode/angles and manual geometry/multiplier overrides are outside the named favorite. You can save, load, rename an identical configuration by saving it again, or delete a favorite. Different optics or zero settings are separate saved configurations.
+- **The active interface** is saved automatically, including calculation inputs, cant mode and both raw angle fields, optic/view and direct-mount selections, rail position, manual overrides and geometry confirmation, searches and filters, favorite controls, open sections, and page/sidebar/range-table scroll positions.
 - **Refreshing** restores the interface. A current calculated solution is recomputed from its restored inputs; unfinished edits remain pending until you calculate.
 
-Loading a named favorite reapplies its weapon/loadout configuration and invalidates the current solution. Measured mounting geometry needs fresh verification when loading a favorite. Refreshing the active interface restores its existing measurements and confirmation.
+Loading a named favorite reapplies its weapon/loadout configuration, derives supported optic geometry from the saved mount/rail position, restores the saved zero distance rather than the optic's factory default, and invalidates the current solution. Measured mounting geometry needs fresh verification when loading a favorite. Older favorites without optic/zero fields remain loadable and keep the current optic and zero setting. Refreshing the active interface restores its existing measurements and confirmation.
 
 The cookies are `h3vrbc_favorites` and `h3vrbc_interface`, each with a lifetime of up to one year. They are specific to the browser and site hostname and do not synchronize across devices. Turning the opt-in off deletes both cookies and cancels pending saves, while keeping the currently displayed setup intact. Clearing the site's cookies also removes the saved data.
 
@@ -139,7 +157,7 @@ The model reproduces the inspected free-flight update, including gravity before 
 
 Modern PIP scope/reflex zeroing uses the caliber's authored drop curve. The nominal optic distance does not force the selected projectile through the sight line at that range. **Calculated zero** separately solves a crossing for the chosen projectile and setup.
 
-Results assume a centered, uncanted optic with no dial trim. The model does not simulate impacts, penetration, ricochets, random spread, wind, Coriolis, spin drift, guided projectiles, or modded behavior. Multi-projectile rounds show one centerline projectile; submunition paths are excluded. Unsupported projectile integrators appear in the unavailable-projectile list.
+The base setup assumes a centered optic with no initial dial trim. The weapon is level unless specific cant is selected; the corrected chart applies the solved target-range adjustments and optional fixed-dial cant uncertainty. The model does not simulate impacts, penetration, ricochets, random spread, wind, Coriolis, spin drift, guided projectiles, or modded behavior. Multi-projectile rounds show one centerline projectile; submunition paths are excluded. Unsupported projectile integrators appear in the unavailable-projectile list.
 
 Stock geometry reflects authored prefab poses, rather than live animations. The model is source-derived and has not yet been validated against live VR shots; timing, scene settings, and mounting geometry can affect agreement.
 
@@ -150,12 +168,13 @@ npm test
 npm run test:extract
 ```
 
-The JavaScript suite covers physics, weapon/device behavior, UI validation, favorites, and interface persistence. Fixture tests run without a game installation; integration checks using the generated dataset are skipped when it is absent. Python tests cover prefab transforms and extraction rules; assembly-backed checks require `game_data/h3vr_Data/Managed/Assembly-CSharp.dll` and otherwise skip.
+The JavaScript suite covers physics, weapon/device behavior, chart projection and rendering, UI validation, favorites, and interface persistence. Fixture tests run without a game installation; integration checks using the generated dataset are skipped when it is absent. Python tests cover prefab transforms and extraction rules; assembly-backed checks require `game_data/h3vr_Data/Managed/Assembly-CSharp.dll` and otherwise skip.
 
 | Location | Purpose |
 | --- | --- |
 | `public/index.html`, `public/style.css`, `public/app.js` | Browser interface and interactions |
 | `public/physics.js` | Projectile model, solutions, and CSV generation |
+| `public/trajectory-chart.js` | Sight-relative isometric SVG chart |
 | `public/weapons.js`, `public/muzzle-devices.js` | Weapon presets, device search, and mounting geometry |
 | `public/optics.js` | Optic search, direct mount matching, and bare-muzzle sight defaults |
 | `public/favorites.js`, `public/interface-state.js` | Cookie validation and persistence |
@@ -168,6 +187,7 @@ Additional model notes:
 - [Muzzle-device inventory and mounting rules](docs/muzzle-devices.md)
 - [Horizontal-drift investigation](docs/horizontal-drift.md)
 - [Optic defaults and optical-origin extraction](docs/optics.md)
+- [Weapon cant and fixed-dial uncertainty](docs/weapon-cant.md)
 
 ## Troubleshooting
 

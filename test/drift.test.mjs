@@ -65,6 +65,18 @@ test("fixed angular drift grows approximately linearly with range", () => {
   close(result.target.windageMoa, near.windageMoa, 0.00001);
 });
 
+test("corrected flight cancels both deterministic device bias axes for inclined shots", () => {
+  for (const inclinationDegrees of [-60, 0, 60]) {
+    const result = calculate(profile, settings, { ...options, attachments: [precision], inclinationDegrees });
+    assert.ok(result.target.lateral > 0);
+    assert.ok(result.target.windageMrad < 0);
+    close(result.correctedFlight.target.height, 0, 0.001);
+    close(result.correctedFlight.target.lateral, 0, 0.001);
+    close(result.correctedFlight.boreYaw, result.boreYaw + result.target.windageMrad / 1000);
+    assert.notEqual(result.correctedFlight.points, result.points);
+  }
+});
+
 test("fixed drift uses the last registered device rather than summing all devices", () => {
   const lastPrecision = calculate(profile, settings, { ...options, attachments: [average, precision] });
   const precisionOnly = calculate(profile, settings, { ...options, attachments: [precision] });

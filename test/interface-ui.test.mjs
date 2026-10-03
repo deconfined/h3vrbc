@@ -313,6 +313,7 @@ test("stale active setup references reject the entire snapshot while keeping fav
     (state) => { state.values.ammunition = "RemovedRound"; },
     (state) => { state.values.ammunition = "556x45mmCartridgeFMJ"; },
     (state) => { state.attachmentIds.push("RemovedAttachment"); },
+    (state) => { state.values["cant-mode"] = "both"; },
   ];
   for (const [index, mutate] of mutations.entries()) {
     await t.test(`stale reference ${index + 1}`, async (t) => {

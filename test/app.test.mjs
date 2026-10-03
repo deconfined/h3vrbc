@@ -210,6 +210,43 @@ test("simulation scene selection refreshes visible limits without silently chang
   assert.equal($("export-csv").disabled, true);
 });
 
+test("top adjustment callouts invert aim corrections in both units while the range card remains unchanged", async (t) => {
+  const { dom, close } = await mount(dataset, "scope-adjustments");
+  t.after(close);
+  const $ = (id) => dom.window.document.getElementById(id);
+  await waitFor(() => !$('solution').hidden || !$('load-error').hidden);
+  assert.equal($("load-error").hidden, true, $("load-error").textContent);
+  assert.equal($("hold-label").textContent.trim(), "ELEVATION ADJUSTMENT");
+  assert.equal($("windage-label").textContent, "WINDAGE ADJUSTMENT");
+  const set = (id, value, type = "input") => {
+    $(id).value = value;
+    $(id).dispatchEvent(new dom.window.Event(type, { bubbles: true }));
+  };
+  const elevations = [], windages = [];
+  for (const [zeroRange, cant] of [[100, 0], [1, 0], [100, 15], [100, -15]]) {
+    set("zero-range", String(zeroRange));
+    set("cant-mode", cant ? "specific" : "none", "change");
+    set("cant-angle", String(cant));
+    $("setup-form").dispatchEvent(new dom.window.Event("submit", { bubbles: true, cancelable: true }));
+    await waitFor(() => !$("setup-form").querySelector('button[type="submit"]').disabled);
+    assert.equal($("solution").hidden, false, $("calculation-error").textContent);
+    const row = $("range-rows").querySelector(".target-row");
+    for (const [valueId, secondaryId, mradColumn, moaColumn] of [
+      ["hold-value", "hold-secondary", 3, 4], ["windage-value", "windage-secondary", 5, 6],
+    ]) {
+      assert.equal(Number($(valueId).textContent), -Number(row.children[mradColumn].textContent) || 0);
+      assert.equal(Number($(secondaryId).textContent.split(" ")[0]), -Number(row.children[moaColumn].textContent) || 0);
+      assert.doesNotMatch($(valueId).textContent, /^-0\.000$/);
+    }
+    elevations.push(Number($("hold-value").textContent));
+    windages.push(Number($("windage-value").textContent));
+    assert.ok(Math.abs(Number($("trajectory-chart").querySelector(".range-point").dataset.heightCm)) < 0.1,
+      "Changing scope display signs must not change the actual corrected solve");
+  }
+  assert.ok(elevations[0] < 0 && elevations[1] > 0, "Both elevation adjustment directions are covered");
+  assert.ok(windages[2] > 0 && windages[3] < 0, "Both windage adjustment directions are covered");
+});
+
 test("firing angle controls trajectory, result labels and CSV, and validates its limits", async (t) => {
   const { dom, close } = await mount(dataset, "firing-angle");
   t.after(close);

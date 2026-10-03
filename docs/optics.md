@@ -72,13 +72,15 @@ The full numeric inventory is the dataset's `optics` array. Positive authored ze
 
 Automatic defaults require an orthogonal source frame, unit-scale source root/mounting parent, known scaling rules, centered optical origin and an uncanted/bore-aligned forward orientation. No lateral optical offset is silently discarded.
 
+These mounting restrictions are relative to the weapon. Rolling the whole weapon/optic setup is a separate [weapon cant input](weapon-cant.md) and does not change its intrinsic mount geometry.
+
 - The G36 combo's reflex view has a custom muzzle reference; its direct-mount geometry is not auto-certified. Its PIP scope view is separate.
 - Extendable `Telescopescope` needs its live extension; the serialized collapsed pose is not an assumed operational default.
 - Side-offset scopes, reversed/folded/canted mounting, below-bore optical origins, angled internal cameras and unknown/scaled parent geometry are not automatically applied.
 - Adapters, risers and linked magnifier/clip-on optics are not composed. A single attachment's optical origin does not describe a linked optical chain.
 - Weapon animation state, occupied mounts and mesh collisions are not evaluated. This remains source-derived stock geometry, not live-VR validation.
 
-Unavailable geometry clears the height/setback inputs and shows a reason. Manual values are still possible where the centered calculator model is appropriate. Changing an optic's zero setting or geometry invalidates the calculation and CSV; browsing the inventory does not. Opt-in interface cookies remember the view, mount, rail position and manual overrides. Named favorites continue to cover only weapon/chamber, ammunition and ordered muzzle devices.
+Unavailable geometry clears the height/setback inputs and shows a reason. Manual values are still possible where the centered calculator model is appropriate. Changing an optic's zero setting or geometry invalidates the calculation and CSV; browsing the inventory does not. Opt-in interface cookies remember the view, mount, rail position and manual overrides. Named favorites save the optic/view, mount, rail position and zero rule/distance alongside weapon/chamber, ammunition and ordered muzzle devices. Loading re-derives supported sight geometry and restores the saved zero rather than the prefab default; manual geometry overrides and target range remain outside named favorites. Older favorites without optical settings remain loadable without replacing the current optic or zero setting.
 
 ## Reproduction and checks
 

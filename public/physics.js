@@ -79,13 +79,17 @@ export function muzzleEffects(settings, options) {
   return { dropMoa, verticalDriftMoa, horizontalDriftMoa, pitchDegrees, yawDegrees };
 }
 
+function withCant(ctx, degrees) {
+  return { ...ctx, cantDegrees: degrees, cantCos: f(Math.cos(degrees * DEG)), cantSin: f(Math.sin(degrees * DEG)) };
+}
+
 function context(profile, settings, options) {
   const barrelFactor = evaluateCurve(options.caliber.barrelCurve, f(f(options.barrelLength) * f(39.37009811401367)));
   const muzzleSpeed = f(f(f(f(profile.muzzleVelocity) * f(options.chamberMultiplier)) * f(options.velocityMultiplier)) * barrelFactor);
   if (!(muzzleSpeed > 0) || !Number.isFinite(muzzleSpeed))
     throw new Error("The supplied launch multipliers produce no positive muzzle velocity.");
   const radius = f(f(profile.diameter) * f(0.5));
-  return {
+  return withCant({
     profile, options, dragCurve: settings.dragCurve, barrelFactor, muzzleSpeed,
     effects: muzzleEffects(settings, options),
     inclinationCos: f(Math.cos(options.inclinationDegrees * DEG)),
@@ -94,7 +98,7 @@ function context(profile, settings, options) {
     density: f(f(1.225000023841858) * f(profile.airDragMultiplier)),
     mass: f(profile.mass), maxDistance: f(Math.min(profile.maxRange, options.sceneLimit)),
     fixedStep: f(options.fixedStep), firstStep: f(options.firstStep),
-  };
+  }, options.cantMode === "specific" ? options.cantDegrees : 0);
 }
 
 function trace(ctx, pitch, yaw, ranges) {
@@ -106,9 +110,14 @@ function trace(ctx, pitch, yaw, ranges) {
   const muzzleForward = f(f(f(o.sightSetback - f(0.005)) * cp) + f(f(o.sightHeight) * sp));
   const muzzleUp = f(f(f(o.sightSetback - f(0.005)) * sp) - f(f(o.sightHeight) * cp));
   const muzzleAlong = f(muzzleForward * cy);
-  let x = f(muzzleForward * sy);
-  let y = f(f(muzzleAlong * si) + f(muzzleUp * ci));
-  let z = f(f(muzzleAlong * ci) - f(muzzleUp * si));
+  const muzzleRight = f(muzzleForward * sy);
+  // Positive cant tilts weapon-up toward the shooter's right. Roll the entire
+  // muzzle pose around the sight ray, then incline it; gravity stays world-down.
+  const spawnRight = ctx.cantDegrees === 0 ? muzzleRight : f(f(muzzleRight * ctx.cantCos) + f(muzzleUp * ctx.cantSin));
+  const spawnUp = ctx.cantDegrees === 0 ? muzzleUp : f(f(muzzleUp * ctx.cantCos) - f(muzzleRight * ctx.cantSin));
+  let x = spawnRight;
+  let y = f(f(muzzleAlong * si) + f(spawnUp * ci));
+  let z = f(f(muzzleAlong * ci) - f(spawnUp * si));
   // Transform.Rotate uses local Euler(x=downward bias,y=rightward bias,z=0).
   const cd = f(Math.cos(ctx.effects.pitchDegrees * DEG));
   const sd = f(Math.sin(ctx.effects.pitchDegrees * DEG));
@@ -119,9 +128,11 @@ function trace(ctx, pitch, yaw, ranges) {
   const baseRight = f(cd * sw);
   const along = f(f(baseForward * cy) - f(baseRight * sy));
   const right = f(f(baseRight * cy) + f(baseForward * sy));
-  let vx = f(ctx.muzzleSpeed * right);
-  let vy = f(ctx.muzzleSpeed * f(f(along * si) + f(up * ci)));
-  let vz = f(ctx.muzzleSpeed * f(f(along * ci) - f(up * si)));
+  const launchRight = ctx.cantDegrees === 0 ? right : f(f(right * ctx.cantCos) + f(up * ctx.cantSin));
+  const launchUp = ctx.cantDegrees === 0 ? up : f(f(up * ctx.cantCos) - f(right * ctx.cantSin));
+  let vx = f(ctx.muzzleSpeed * launchRight);
+  let vy = f(ctx.muzzleSpeed * f(f(along * si) + f(launchUp * ci)));
+  let vz = f(ctx.muzzleSpeed * f(f(along * ci) - f(launchUp * si)));
   const projectedRange = () => f(f(z * ci) + f(y * si));
   const projectedHeight = () => f(f(y * ci) - f(z * si));
   let distance = 0, time = 0, index = 0, moving = true;
@@ -213,8 +224,21 @@ function solvePitch(ctx, range, yaw) {
 }
 
 function solveAim(ctx, range) {
-  let yaw = -ctx.effects.yawDegrees * DEG;
-  let pitch = solvePitch(ctx, range, yaw);
+  let pitch, yaw;
+  if (ctx.cantDegrees !== 0) {
+    // A sideways weapon makes pitch-only height bracketing singular. Seed the
+    // coupled solver by expressing an uncanted solution in weapon-local axes.
+    const seed = solveAim(withCant(ctx, 0), range);
+    const x = Math.cos(seed.pitch) * Math.sin(seed.yaw), y = Math.sin(seed.pitch);
+    const z = Math.cos(seed.pitch) * Math.cos(seed.yaw);
+    const localX = x * ctx.cantCos - y * ctx.cantSin;
+    const localY = y * ctx.cantCos + x * ctx.cantSin;
+    pitch = Math.atan2(localY, Math.hypot(localX, z));
+    yaw = Math.atan2(localX, z);
+  } else {
+    yaw = -ctx.effects.yawDegrees * DEG;
+    pitch = solvePitch(ctx, range, yaw);
+  }
   // Inclined shots project single-precision world positions back onto the
   // sight line. Allow for cancellation/quantization at roughly eight float32
   // ULPs of range, rather than demanding a sub-ULP trajectory crossing.
@@ -241,6 +265,14 @@ function solveAim(ctx, range) {
 }
 
 function validate(profile, options) {
+  if (!["none", "specific", "uncertainty"].includes(options.cantMode)) throw new Error("Unknown weapon cant mode.");
+  if (!Number.isFinite(options.cantDegrees) || Math.abs(options.cantDegrees) > 90)
+    throw new Error("Specific weapon cant must be finite and between -90° and +90°.");
+  if (!Number.isFinite(options.cantToleranceDegrees) || options.cantToleranceDegrees < 0 || options.cantToleranceDegrees > 90)
+    throw new Error("Cant uncertainty must be finite and between 0° and 90°.");
+  if ((options.cantMode !== "specific" && options.cantDegrees !== 0)
+    || (options.cantMode !== "uncertainty" && options.cantToleranceDegrees !== 0))
+    throw new Error("Specific weapon cant and cant uncertainty are mutually exclusive; inactive angles must be zero.");
   for (const key of ["zeroRange", "targetRange", "rangeStep", "velocityMultiplier", "chamberMultiplier", "fixedStep", "sceneLimit"])
     if (!Number.isFinite(options[key]) || options[key] <= 0) throw new Error(`${key} must be positive and finite.`);
   for (const key of ["barrelLength", "sightHeight", "firstStep", "gravity"])
@@ -255,8 +287,40 @@ function validate(profile, options) {
   if (Math.ceil(options.targetRange / options.rangeStep) > 300) throw new Error("Range card is limited to 300 intervals. Increase the table interval.");
 }
 
+function cantUncertainty(ctx, aim, plotRanges, nominal) {
+  const tolerance = ctx.options.cantToleranceDegrees;
+  const angles = tolerance === 0 ? [0] : Array.from({ length: 21 }, (_, i) => tolerance * (i - 10) / 10);
+  const ranges = [...new Set([...plotRanges, ctx.options.targetRange])].sort((a, b) => a - b);
+  const samples = angles.map((degrees) => {
+    if (degrees === 0) return { cantDegrees: 0, points: nominal.points, target: nominal.target, reason: null };
+    // Do NOT re-solve for each tilt: uncertainty means the displayed dial
+    // settings are held fixed while the weapon accidentally rolls.
+    const flight = trace(withCant(ctx, degrees), aim.pitch, aim.yaw, ranges);
+    const byRange = new Map(flight.samples.map((point) => [point.range, point]));
+    const target = byRange.get(ctx.options.targetRange) ?? null;
+    return { cantDegrees: degrees, points: [flight.initial, ...plotRanges.map((range) => byRange.get(range)).filter(Boolean)],
+      target, reason: target ? null : flight.reason };
+  });
+  const missing = samples.filter((sample) => !sample.target);
+  const result = { toleranceDegrees: tolerance, boreAngle: aim.pitch, boreYaw: aim.yaw,
+    samples, complete: missing.length === 0, sections: [], target: null,
+    unreachableAngles: missing.map((sample) => sample.cantDegrees) };
+  if (missing.length) return result; // Never present a partial band as bounded uncertainty.
+  const maps = samples.map((sample) => new Map(sample.points.slice(1).map((point) => [point.range, point])));
+  result.sections = [samples.map((sample) => sample.points[0]),
+    ...plotRanges.filter((range) => maps.every((map) => map.has(range))).map((range) => maps.map((map) => map.get(range)))];
+  const targets = samples.map((sample) => sample.target);
+  result.target = {
+    heightMin: Math.min(...targets.map((point) => point.height)), heightMax: Math.max(...targets.map((point) => point.height)),
+    lateralMin: Math.min(...targets.map((point) => point.lateral)), lateralMax: Math.max(...targets.map((point) => point.lateral)),
+    lateralMinMrad: Math.min(...targets.map((point) => Math.atan2(point.lateral, point.range) * 1000)),
+    lateralMaxMrad: Math.max(...targets.map((point) => Math.atan2(point.lateral, point.range) * 1000)),
+  };
+  return result;
+}
+
 export function calculate(profile, settings, options) {
-  options = { inclinationDegrees: 0, attachments: [], ...options };
+  options = { inclinationDegrees: 0, attachments: [], cantMode: "none", cantDegrees: 0, cantToleranceDegrees: 0, ...options };
   validate(profile, options);
   const ctx = context(profile, settings, options);
   const authoredDrop = options.zeroModel === "game" ? evaluateCurve(options.caliber.opticDropCurve, f(f(options.zeroRange) * f(0.0010000000474974513))) : 0;
@@ -276,16 +340,28 @@ export function calculate(profile, settings, options) {
   const flight = trace(ctx, boreAngle, boreYaw, ranges);
   const byRange = new Map(flight.samples.map((sample) => [sample.range, sample]));
   if (!byRange.has(options.targetRange)) throw new Error(`The current optic setup cannot reach ${options.targetRange} m. ${flight.reason}`);
+  let targetAim;
   const rows = [...cardRanges].sort((a, b) => a - b).map((range) => {
     const sample = byRange.get(range);
     if (!sample) throw new Error(`No primary-flight sample at ${range.toFixed(1)} m. ${flight.reason}`);
     const required = solveAim(ctx, range);
+    if (range === options.targetRange) targetAim = required;
     const elevation = required.pitch - boreAngle, windage = required.yaw - boreYaw;
     return { ...sample, elevationMrad: elevation * 1000, elevationMoa: elevation / DEG * 60, windageMrad: windage * 1000, windageMoa: windage / DEG * 60, isTarget: range === options.targetRange, isSetting: range === settingCardRange };
   });
   const points = [flight.initial];
   for (const range of plotRanges) { const sample = byRange.get(range); if (sample) points.push(sample); }
-  return { muzzleSpeed: ctx.muzzleSpeed, barrelFactor: ctx.barrelFactor, boreAngle, boreYaw, authoredDrop, settingRange, muzzleEffects: ctx.effects, target: rows.find((row) => row.isTarget), rows, points, maxDistance: ctx.maxDistance };
+  // Trace the actual solved launch, not a translated copy of the base flight.
+  // Keep the original offsets/time and CSV as the pre-correction range card.
+  const correctedTrace = trace(ctx, targetAim.pitch, targetAim.yaw, ranges);
+  const correctedByRange = new Map(correctedTrace.samples.map((sample) => [sample.range, sample]));
+  const correctedTarget = correctedByRange.get(options.targetRange);
+  if (!correctedTarget) throw new Error(`The corrected flight cannot reach ${options.targetRange} m. ${correctedTrace.reason}`);
+  const correctedPoints = [correctedTrace.initial];
+  for (const range of plotRanges) { const sample = correctedByRange.get(range); if (sample) correctedPoints.push(sample); }
+  const correctedFlight = { points: correctedPoints, target: correctedTarget, boreAngle: targetAim.pitch, boreYaw: targetAim.yaw, cantDegrees: ctx.cantDegrees };
+  const uncertainty = options.cantMode === "uncertainty" ? cantUncertainty(ctx, targetAim, plotRanges, correctedFlight) : null;
+  return { muzzleSpeed: ctx.muzzleSpeed, barrelFactor: ctx.barrelFactor, boreAngle, boreYaw, authoredDrop, settingRange, muzzleEffects: ctx.effects, target: rows.find((row) => row.isTarget), rows, points, correctedFlight, cantUncertainty: uncertainty, maxDistance: ctx.maxDistance };
 }
 
 export function toCSV(solution, profile, options) {
@@ -303,12 +379,24 @@ export function toCSV(solution, profile, options) {
     ["Mounted muzzle up shift m", options.muzzleUpShift ?? (options.attachments?.length ? "" : 0)],
     ["Zero model", options.zeroModel], ["Optic setting m", options.zeroRange],
     ["Sight-line inclination degrees", options.inclinationDegrees ?? 0], ["Range interpretation", "Distance along line of sight from optical origin"],
+    ["Weapon cant mode", options.cantMode ?? "none"], ["Specific weapon cant degrees (positive right)", options.cantMode === "specific" ? options.cantDegrees : 0],
+    ["Cant tolerance degrees (+/-)", solution.cantUncertainty?.toleranceDegrees ?? 0],
+    ["Cant uncertainty complete", solution.cantUncertainty ? solution.cantUncertainty.complete : "not requested"],
+    ["Cant uncertainty samples", solution.cantUncertainty?.samples.length ?? 0],
+    ["Cant uncertainty interpretation", "Sampled corrected POI envelope about nominal 0-degree cant; nominal dials held fixed; not a statistical confidence interval"],
+    ["Cant uncertainty unreachable angles degrees", solution.cantUncertainty?.unreachableAngles.join("; ") ?? ""],
+    ["Corrected cant lateral min cm", solution.cantUncertainty?.target ? solution.cantUncertainty.target.lateralMin * 100 : ""],
+    ["Corrected cant lateral max cm", solution.cantUncertainty?.target ? solution.cantUncertainty.target.lateralMax * 100 : ""],
+    ["Corrected cant lateral min mrad", solution.cantUncertainty?.target?.lateralMinMrad ?? ""],
+    ["Corrected cant lateral max mrad", solution.cantUncertainty?.target?.lateralMaxMrad ?? ""],
+    ["Corrected cant height min cm", solution.cantUncertainty?.target ? solution.cantUncertainty.target.heightMin * 100 : ""],
+    ["Corrected cant height max cm", solution.cantUncertainty?.target ? solution.cantUncertainty.target.heightMax * 100 : ""],
     ["Bore pitch relative to sight degrees", solution.boreAngle / DEG], ["Bore yaw relative to sight degrees", solution.boreYaw / DEG],
     ["Sight height m", options.sightHeight], ["Sight setback m", options.sightSetback], ["Effective chamber-to-muzzle distance m", options.barrelLength],
     ["Chamber multiplier", options.chamberMultiplier], ["Shot multiplier", options.velocityMultiplier],
     ["Fixed drop MOA", solution.muzzleEffects.dropMoa], ["Vertical device drift MOA", solution.muzzleEffects.verticalDriftMoa], ["Horizontal device drift MOA", solution.muzzleEffects.horizontalDriftMoa],
     ["Ballistic gravity m/s^2", options.gravity], ["Fixed tick s", options.fixedStep], ["First fire tick s", options.firstStep], ["Scene limit m", options.sceneLimit], ["Model", MODEL],
-    ["Flight interpretation", "Primary centerline; height/lateral offsets from sight line; positive elevation up, positive windage right; corrections solved in both axes"],
+    ["Flight interpretation", "Primary centerline; height/lateral offsets in the unrolled sight frame; positive elevation weapon-up, positive windage weapon-right; corrections solved in both axes"],
   ];
   return metadata.map((row) => row.map(quote).join(",")).join("\r\n") + "\r\n\r\n" +
     "range_m,height_cm,lateral_cm,elevation_mrad,elevation_MOA,windage_mrad,windage_MOA,time_s,velocity_state_m_per_s\r\n" +

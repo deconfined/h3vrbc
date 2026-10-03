@@ -434,21 +434,62 @@ select {
   color: var(--muted);
   font-size: 9px;
   white-space: nowrap;
+  flex-wrap: wrap;
+}
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 .legend-line,
-.legend-dash {
+.legend-dash,
+.legend-shadow {
   width: 17px;
   border-top: 2px solid var(--accent);
 }
 .legend-dash {
   border-top: 1px dashed var(--muted);
-  margin-left: 8px;
+}
+.legend-shadow {
+  border-top: 1px dashed #71b1be;
+}
+.legend-cant {
+  width: 17px;
+  height: 7px;
+  background: #aa9fdd55;
+  border: 1px solid #aa9fdd;
+}
+.cant-result {
+  color: #c2b8ea;
+  font-size: 11px;
+  line-height: 1.6;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.cant-warning {
+  color: var(--accent);
+}
+.chart-scroll {
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+}
+.chart-scroll:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 3px;
 }
 #trajectory-chart {
   width: 100%;
   display: block;
   overflow: visible;
   min-height: 160px;
+  min-width: 900px;
+}
+.chart-note {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.6;
+  margin: 12px 0 0;
 }
 .chart-footer {
   display: flex;
@@ -723,12 +764,120 @@ footer {
 }
 .chart-axis {
   fill: var(--muted);
-  font: 10px var(--mono);
+  font: 12px var(--mono);
+}
+.chart-axis-line {
+  stroke: #637178;
+  stroke-width: 1;
+}
+.chart-plane {
+  fill: #111d23;
+  fill-opacity: 0.65;
+  stroke: var(--border);
+  stroke-width: 1;
+}
+.range-plane {
+  fill: #71b1be;
+  fill-opacity: 0.04;
+  stroke: #596d77;
+  stroke-width: 1;
+  stroke-dasharray: 4 6;
+}
+.cant-envelope-slice {
+  fill: #aa9fdd;
+  fill-opacity: 0.14;
+  stroke: none;
+}
+.cant-target-region {
+  fill: #aa9fdd;
+  fill-opacity: 0.18;
+  stroke: #aa9fdd;
+  stroke-width: 1;
+}
+.cant-target-width {
+  stroke: currentColor;
+  stroke-width: 2;
+}
+.trajectory-shadow {
+  fill: none;
+  stroke: #71b1be;
+  stroke-opacity: 0.6;
+  stroke-width: 1.5;
+  stroke-dasharray: 4 5;
+}
+.projection-line {
+  stroke: #71b1be;
+  stroke-opacity: 0.3;
+  stroke-width: 1;
+  stroke-dasharray: 3 5;
+}
+.muzzle-point {
+  fill: var(--panel);
+  stroke: var(--accent);
+  stroke-width: 1.5;
 }
 .sight-line {
   stroke: #98a6ac;
   stroke-width: 1;
   stroke-dasharray: 6 5;
+}
+.sight-line-arrowhead {
+  fill: #98a6ac;
+}
+.optic-zero-point {
+  fill: var(--panel);
+  stroke: #b5ab8e;
+  stroke-width: 1.5;
+}
+.optic-zero-label {
+  fill: #b5ab8e;
+  font: 10px var(--mono);
+}
+.back-poa-point {
+  fill: var(--panel);
+  stroke: var(--muted);
+  stroke-width: 1.5;
+}
+.back-offset {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-dasharray: 3 3;
+}
+.back-height-offset,
+.back-height-label,
+.back-height-key {
+  color: #b5ab8e;
+}
+.back-lateral-offset,
+.back-lateral-label,
+.back-lateral-key {
+  color: #71b1be;
+}
+.cant-target-width,
+.back-error-label,
+.back-error-key {
+  color: #aa9fdd;
+}
+.back-readout-heading {
+  fill: var(--muted);
+  font: 11px var(--mono);
+  letter-spacing: 0.6px;
+}
+.back-readout-key {
+  stroke: currentColor;
+  stroke-width: 2;
+}
+.back-readout-label {
+  fill: currentColor;
+  font: 12px var(--mono);
+}
+.back-readout-value {
+  font-size: 15px;
+  font-weight: 600;
+}
+.back-readout-unavailable {
+  opacity: 0.55;
 }
 .trajectory {
   fill: none;
@@ -736,16 +885,7 @@ footer {
   stroke-width: 2.5;
   stroke-linejoin: round;
 }
-.setting-line {
-  stroke: #6f6b58;
-  stroke-width: 1;
-  stroke-dasharray: 3 5;
-}
-.setting-label {
-  fill: #b5ab8e;
-  font: 8px var(--mono);
-}
-.target-point {
+.range-point {
   fill: var(--accent);
   stroke: var(--panel);
   stroke-width: 2;

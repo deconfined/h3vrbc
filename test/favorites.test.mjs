@@ -12,6 +12,8 @@ const favorite = {
   roundId: "556x45mmCartridgeFMJ",
   attachmentIds: ["BarrelExtenderThinLong", "SuppressorMk12", "SuppressorMk12"],
 };
+const opticFavorite = { ...favorite, id: "favorite-2", name: "Scoped rifle", opticId: "Scope:42",
+  opticMountIndex: 1, opticRailPosition: 0.175, zeroModel: "game", zeroRange: 275 };
 
 function browser(t, url = "https://example.test/calculator", cookieJar = new CookieJar()) {
   const dom = new JSDOM("", { url, cookieJar });
@@ -45,6 +47,46 @@ test("explicit writes persist consent and ordered attachment IDs across page loa
   assert.deepEqual(store.read(), [favorite], "Returned data cannot mutate saved records");
   next.store.write([]);
   assert.deepEqual(next.store.read(), [], "An empty list still records explicit consent");
+});
+
+test("optic favorites round-trip alongside unchanged legacy records without rewriting reads", (t) => {
+  const { store, document, cookieJar } = browser(t);
+  store.write([favorite, opticFavorite]);
+  assert.deepEqual(store.read(), [favorite, opticFavorite]);
+  const previous = document.cookie;
+  const next = browser(t, "https://example.test/another/page", cookieJar);
+  assert.deepEqual(next.store.read(), [favorite, opticFavorite]);
+  assert.equal(document.cookie, previous);
+  const manual = { ...opticFavorite, opticId: "", opticMountIndex: null, opticRailPosition: null,
+    zeroModel: "calculated", zeroRange: 75 };
+  store.write([manual]);
+  assert.deepEqual(store.read(), [manual]);
+});
+
+test("partial or invalid optic/zero settings cannot overwrite existing favorites", (t) => {
+  const { store, document } = browser(t);
+  store.write([favorite, opticFavorite]);
+  const previous = document.cookie;
+  const partial = { ...favorite, opticId: "Scope:42" };
+  const missingRange = { ...opticFavorite };
+  delete missingRange.zeroRange;
+  for (const value of [partial, missingRange,
+    ...[null, 42, " ", "x".repeat(257)].map((opticId) => ({ ...opticFavorite, opticId })),
+    ...[-1, 0.5, "1", Infinity].map((opticMountIndex) => ({ ...opticFavorite, opticMountIndex })),
+    ...[-0.1, 1.1, NaN, "0.5"].map((opticRailPosition) => ({ ...opticFavorite, opticRailPosition })),
+    ...[0, 5001, 100.5, NaN, "100"].map((zeroRange) => ({ ...opticFavorite, zeroRange })),
+    { ...opticFavorite, zeroModel: "unknown" },
+    { ...opticFavorite, opticId: "" },
+    { ...opticFavorite, opticMountIndex: null },
+  ]) {
+    assert.throws(() => store.write([value]), /favorite setups are invalid/);
+    assert.equal(document.cookie, previous);
+  }
+  for (const zeroRange of [1, 5000]) {
+    const value = { ...opticFavorite, zeroRange };
+    store.write([value]);
+    assert.deepEqual(store.read(), [value]);
+  }
 });
 
 test("favorites use a year expiry, root path, strict SameSite, and HTTPS Secure", (t) => {

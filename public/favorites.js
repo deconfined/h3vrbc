@@ -2,14 +2,14 @@ const COOKIE_NAME = "h3vrbc_favorites";
 const COOKIE_DAYS = 365;
 const MAX_COOKIE_LENGTH = 3800;
 const RECORD_KEYS = ["id", "name", "weaponId", "chamberIndex", "roundId", "attachmentIds"];
+const OPTIC_KEYS = ["opticId", "opticMountIndex", "opticRailPosition", "zeroModel", "zeroRange"];
 
 function isIdentifier(value, maxLength = 256) {
   return typeof value === "string" && value.length > 0 && value.length <= maxLength && value.trim().length > 0;
 }
 
 function isFavorite(value) {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    && Object.keys(value).length === RECORD_KEYS.length
+  const base = value !== null && typeof value === "object" && !Array.isArray(value)
     && RECORD_KEYS.every((key) => Object.hasOwn(value, key))
     && isIdentifier(value.id, 128)
     && typeof value.name === "string" && value.name.length > 0 && value.name.length <= 60 && value.name.trim().length > 0
@@ -17,6 +17,18 @@ function isFavorite(value) {
     && Number.isSafeInteger(value.chamberIndex) && value.chamberIndex >= 0
     && isIdentifier(value.roundId)
     && Array.isArray(value.attachmentIds) && Array.from(value.attachmentIds).every((id) => isIdentifier(id));
+  if (!base) return false;
+  // Existing six-field records remain readable and are never rewritten on read.
+  if (Object.keys(value).length === RECORD_KEYS.length) return true;
+  return Object.keys(value).length === RECORD_KEYS.length + OPTIC_KEYS.length
+    && OPTIC_KEYS.every((key) => Object.hasOwn(value, key))
+    && (value.opticId === "" || isIdentifier(value.opticId))
+    && (value.opticMountIndex === null || Number.isSafeInteger(value.opticMountIndex) && value.opticMountIndex >= 0)
+    && (value.opticRailPosition === null || Number.isFinite(value.opticRailPosition) && value.opticRailPosition >= 0 && value.opticRailPosition <= 1)
+    && (value.opticId !== "" || value.opticMountIndex === null && value.opticRailPosition === null)
+    && (value.opticMountIndex !== null || value.opticRailPosition === null)
+    && ["game", "geometric", "unadjusted", "calculated"].includes(value.zeroModel)
+    && Number.isInteger(value.zeroRange) && value.zeroRange >= 1 && value.zeroRange <= 5000;
 }
 
 function validFavorites(favorites) {
@@ -51,7 +63,7 @@ export function createFavoriteStore(document) {
   }
 
   function write(favorites) {
-    if (!validFavorites(favorites)) throw new Error("The favorite setups are invalid. Save a weapon, chamber, round, and attachment list with a name of 1–60 characters.");
+    if (!validFavorites(favorites)) throw new Error("The favorite setups are invalid. Check the weapon, chamber, round, attachments, optic and zero setting, and use a name of 1–60 characters.");
     const value = encodeURIComponent(JSON.stringify({ version: 1, consent: true, favorites }));
     const expires = new Date(Date.now() + COOKIE_DAYS * 86400000).toUTCString();
     const cookie = `${COOKIE_NAME}=${value}; Max-Age=${COOKIE_DAYS * 86400}; Expires=${expires}; ${attributes()}`;

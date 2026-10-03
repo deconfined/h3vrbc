@@ -64,7 +64,7 @@ async function controls(data, name, t) {
   return { $, dom, set, recalculate, csv };
 }
 
-test("muzzle picker applies an ordered loadout, adjusts geometry and renders right-POI/left-correction signs and CSV", async (t) => {
+test("muzzle picker renders scope-setting signs opposite the aim corrections retained in the range card and CSV", async (t) => {
   const { $, set, recalculate, csv } = await controls(dataset, "muzzle-loadout", t);
   assert.equal($("add-muzzle-device").disabled, true, "A source firearm identity is required");
   set("weapon", "Rifle", "change");
@@ -88,8 +88,8 @@ test("muzzle picker applies an ordered loadout, adjusts geometry and renders rig
   set("target-range", "500");
   await recalculate();
   assert.equal($("solution").hidden, false, $("calculation-error").textContent);
-  assert.ok(Number($("windage-value").textContent) < 0);
-  assert.match($("windage-secondary").textContent, /aim left/);
+  assert.ok(Number($("windage-value").textContent) > 0);
+  assert.match($("windage-secondary").textContent, /scope setting/);
   assert.match($("lateral-label").textContent, /right of POA/);
   const row = $("range-rows").querySelector(".target-row");
   assert.equal(row.children.length, 9);
@@ -126,7 +126,7 @@ test("muzzle picker applies an ordered loadout, adjusts geometry and renders rig
   assert.equal($("muzzle-geometry-group").hidden, true);
   await recalculate();
   assert.equal(Number($("windage-value").textContent), 0);
-  assert.match($("windage-secondary").textContent, /no lateral correction/);
+  assert.match($("windage-secondary").textContent, /no windage adjustment/);
   assert.ok((await csv()).includes('"Muzzle devices in registration order",""'));
 });
 
@@ -199,7 +199,7 @@ test("the UI offers all 84 actual devices and calculates an extracted M4/Mk12 lo
   assert.equal($("barrel-length").valueAsNumber, 0.5015700061258377);
   await recalculate();
   assert.equal($("solution").hidden, false, $("calculation-error").textContent);
-  assert.ok(Number($("windage-value").textContent) < 0);
+  assert.ok(Number($("windage-value").textContent) > 0);
   assert.match($("lateral-label").textContent, /right of POA/);
   const exported = await csv();
   assert.ok(exported.includes('"Weapon hash ID","M4Carbine"'));

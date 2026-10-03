@@ -67,6 +67,25 @@ test("calculated zero actually crosses the sight line rather than using the auth
   assert.ok(result.boreAngle > nominal.boreAngle);
 });
 
+test("corrected flight retraces the solved launch without replacing the base trajectory or range card", () => {
+  for (const inclinationDegrees of [-60, 0, 60]) {
+    const options = { ...setup, targetRange: 150, inclinationDegrees };
+    const result = calculate(profile, settings, options);
+    const corrected = result.correctedFlight;
+    close(corrected.boreAngle, result.boreAngle + result.target.elevationMrad / 1000);
+    close(corrected.boreYaw, result.boreYaw + result.target.windageMrad / 1000);
+    close(corrected.target.height, 0, 0.001);
+    close(corrected.target.lateral, 0, 0.001);
+    assert.ok(Math.abs(result.target.height) > 0.1);
+    assert.notDeepEqual(corrected.points, result.points);
+    const equivalent = calculate(profile, settings, { ...options, zeroModel: "calculated", zeroRange: options.targetRange });
+    assert.deepEqual(corrected.points, equivalent.points,
+      "The corrected path must match the actual integrator at the solved launch angles");
+    assert.equal(result.target, result.rows.find((row) => row.isTarget));
+    assert.ok(toCSV(result, profile, options).includes(`${result.target.height * 100},${result.target.lateral * 100}`));
+  }
+});
+
 test("flight multiplier changes displacement and flight time, not the drag velocity state", () => {
   const options = {
     ...setup,

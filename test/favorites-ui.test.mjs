@@ -104,7 +104,7 @@ test("favorites default to opt-out and do not write cookies or alter the current
   assert.equal($("export-csv").disabled, false);
 });
 
-test("explicit opt-in saves only weapon, chamber, round and ordered attachments, and loading restores that setup", async (t) => {
+test("explicit opt-in saves the loadout and zero setting without target range or manual overrides", async (t) => {
   const { $, dom, set, consent, add, recalculate, stored, choices } = await controls("favorites-save-load", t);
   consent(true);
   assert.equal($("favorites-controls").hidden, false);
@@ -152,7 +152,8 @@ test("explicit opt-in saves only weapon, chamber, round and ordered attachments,
   assert.equal(choices().length, 1);
   const saved = stored().favorites[0];
   assert.deepEqual(saved, { id: saved.id, name: "My combination setup", weaponId: "Combo", chamberIndex: 1,
-    roundId: "Round8SP", attachmentIds: ["Extender", "Extender", "Suppressor"] });
+    roundId: "Round8SP", attachmentIds: ["Extender", "Extender", "Suppressor"],
+    opticId: "", opticMountIndex: null, opticRailPosition: null, zeroModel: "game", zeroRange: 100 });
   assert.ok(saved.id);
 
   set("favorite-name", "");
