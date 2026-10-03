@@ -113,11 +113,16 @@
                       step="any"
                       required
                     />
-                    <p class="field-note">
-                      Fixed tick comes from the install. Fire advances once
-                      immediately using its callback's deltaTime; first tick
-                      defaults to the fixed tick, but can differ in-game.
-                    </p>
+<p class="field-note">
+                    Fixed tick comes from the install. Fire advances once
+                    immediately using its callback's deltaTime; first tick
+                    defaults to the fixed tick, but can differ in-game.
+                    Solution cost scales roughly with 1/tick, and the range
+                    card is solved once per row, so a very fine tick with a
+                    small table interval is the expensive combination. The
+                    solve runs in a background worker where the browser
+                    supports one.
+                  </p>
                   </details>
                 </div>
               </details>
@@ -322,18 +327,28 @@
                   <p class="field-note" id="cant-note">Specific cant and cant uncertainty are mutually exclusive. These are assumed inputs; the calculator cannot detect live weapon cant.</p>
                   <div class="input-pair">
                     <div>
-                      <label for="target-range">Target sight-line range <span>m</span></label>
+                      <label for="target-range">Target range <span>m</span></label>
                       <input
                         id="target-range"
                         name="targetRange"
                         type="number"
                         value="300"
-                        min="1"
+                        min="0.01"
                         max="5000"
-                        step="1"
+                        step="any"
                         required
                       />
-                      <p class="field-note">Distance along the sight line from the optical origin, not horizontal ground distance.</p>
+                      <label for="range-mode" class="sub-label">Measured as</label>
+                      <select id="range-mode" name="rangeMode" aria-describedby="range-mode-note">
+                        <option value="sight">Along the sight line (from the optic)</option>
+                        <option value="horizontal">Horizontal distance</option>
+                      </select>
+                      <p class="field-note" id="range-mode-note">
+                        The solve always works in distance measured along the
+                        sight line from the optical origin. Choosing a
+                        horizontal distance converts it by dividing by the
+                        cosine of the firing angle.
+                      </p>
                     </div>
                     <div>
                       <label for="range-step">Table interval <span>m</span></label>
@@ -347,6 +362,7 @@
                         step="1"
                         required
                       />
+                      <p class="field-note">Range-card rows are solved independently, one aim solve per row.</p>
                     </div>
                   </div>
                 </div>
@@ -435,7 +451,9 @@
                 <span id="lateral-label" class="metric-detail">—</span>
               </div>
               <div class="metric">
-                <span class="metric-label">BASE FLIGHT TIME</span>
+                <span class="metric-label">BASE SHOT FLIGHT TIME
+                  <span class="shot-tag">uncorrected</span>
+                </span>
                 <div>
                   <strong id="flight-time">—</strong
                   ><span class="metric-unit">s</span>
@@ -450,12 +468,33 @@
                 </div>
                 <span class="metric-detail" id="barrel-factor">—</span>
               </div>
+              <div class="metric">
+                <span class="metric-label">GROUP CONE AT TARGET
+                  <span class="shot-tag">corrected</span>
+                </span>
+                <div>
+                  <strong id="spread-diameter">—</strong
+                  ><span class="metric-unit">cm</span>
+                </div>
+                <span class="metric-detail" id="spread-detail">—</span>
+              </div>
+              <div class="metric">
+                <span class="metric-label">CORRECTED IMPACT
+                  <span class="shot-tag">corrected</span>
+                </span>
+                <div>
+                  <strong id="corrected-impact">—</strong
+                  ><span class="metric-unit">cm</span>
+                </div>
+                <span class="metric-detail" id="corrected-detail">—</span>
+              </div>
             </div>
+            <p class="solving-note" id="calculation-time" role="status"></p>
             <div class="panel chart-panel">
               <div class="chart-heading">
                 <div>
-                  <p class="eyebrow">FREE FLIGHT / ISOMETRIC 2.5D</p>
-                  <h2>Corrected trajectory</h2>
+                  <p class="eyebrow">CORRECTED SHOT / ISOMETRIC 2.5D</p>
+                  <h2>Corrected trajectory <span class="shot-tag">solved aim applied</span></h2>
                 </div>
                 <div class="legend">
                   <span class="legend-item">
@@ -508,6 +547,9 @@
                 uncorrected POA; DROP means below. These and DRIFT are
                 geometric offsets, not dial settings. ERROR is lateral cant
                 uncertainty in cm; ± gives the error on each side, not total width.
+                CONE is the full-disc bound of the game's launch dispersion at this
+                range, not a measured group; it is drawn on the wall only when it
+                fits, and the readout keeps the figure when it does not.
                 When enabled, the purple band shows sampled accidental-cant
                 uncertainty with the displayed dials held fixed.
                 Only the ray extends if the zero is beyond the selected range.
@@ -528,12 +570,20 @@
               <div class="table-heading">
                 <div class="section-heading">
                   <span class="section-number">02</span>
-                  <h2>Range card</h2>
+                  <h2>Range card <span class="shot-tag">base optic setting, uncorrected</span></h2>
                 </div>
                 <button id="export-csv" class="secondary" type="button">
                   Export CSV
                 </button>
               </div>
+              <p class="table-note">
+                This whole table is the <strong>base shot</strong>: what the
+                projectile does at the optic's own setting, before you apply any
+                elevation or windage correction. The chart above is the
+                <strong>corrected shot</strong> at the selected range. Their
+                offsets, times and speeds differ, and only the corrected flight
+                is aimed at the target.
+              </p>
               <p class="table-note">
                 Positive elevation: raise aim. Negative elevation: lower aim.
                 With specific cant, elevation/windage adjustments use the
@@ -543,12 +593,16 @@
                 aim left. Range is measured along the sight line. Height is the
                 offset perpendicular to it, not world-vertical height. These are
                 aim corrections, with the opposite signs to the scope adjustments
-                above. The range card shows offsets, time and speed at the base optic
-                setting, before correction. Elevation and windage are the solved
-                adjustments; the isometric chart shows the resulting corrected
-                flight. Cant uncertainty keeps this nominal range card unchanged;
+                above. Cant uncertainty keeps this nominal range card unchanged;
                 the purple band and summary show corrected POI uncertainty at the
                 selected range.
+              </p>
+              <p class="table-note">
+                Cone Ø is the full-disc bound of the game's own dispersion at
+                that range, from the round's authored spread plus the firearm's
+                and each device's mechanical accuracy class. It is a bound on a
+                random per-object draw, not a predicted group; the same shot can
+                print a different bound in another session.
               </p>
               <div class="table-scroll">
                 <table>
@@ -563,6 +617,7 @@
                       <th scope="col">Windage <span>MOA</span></th>
                       <th scope="col">Flight <span>s</span></th>
                       <th scope="col">Speed <span>m/s</span></th>
+                      <th scope="col">Cone Ø <span>cm</span></th>
                     </tr>
                   </thead>
                   <tbody id="range-rows"></tbody>

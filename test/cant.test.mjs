@@ -38,8 +38,12 @@ test("specific cant also compensates muzzle-device bias, and calculated base zer
     const zeroed = calculate(profile, settings, { ...options, zeroModel: "calculated", zeroRange: options.targetRange });
     close(zeroed.target.height, 0);
     close(zeroed.target.lateral, 0);
-    close(zeroed.target.elevationMrad, 0, 0.00001);
-    close(zeroed.target.windageMrad, 0, 0.00001);
+    // The solver guarantees a positional crossing, not an exact dial zero. Both
+    // aim axes can only be as exact as that band allows once divided back into
+    // an angle, so assert the angle the position guarantee actually implies.
+    const dial = 2 * Math.max(0.000001, options.targetRange * 0.000001) / options.targetRange * 1000;
+    close(zeroed.target.elevationMrad, 0, dial);
+    close(zeroed.target.windageMrad, 0, dial);
   }
 });
 

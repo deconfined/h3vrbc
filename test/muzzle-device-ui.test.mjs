@@ -92,7 +92,7 @@ test("muzzle picker renders scope-setting signs opposite the aim corrections ret
   assert.match($("windage-secondary").textContent, /scope setting/);
   assert.match($("lateral-label").textContent, /right of POA/);
   const row = $("range-rows").querySelector(".target-row");
-  assert.equal(row.children.length, 9);
+  assert.equal(row.children.length, 10);
   assert.ok(Number(row.children[2].textContent) > 0, "Lateral POI is right");
   assert.ok(Number(row.children[5].textContent) < 0, "Windage correction is left");
   const exported = await csv();

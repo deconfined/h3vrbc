@@ -73,6 +73,33 @@ export function createBackPlaneOffsets(reference, impact, bounds = null) {
   return { poa, corner, impact, height: impact.height - poa.height, lateral: impact.lateral - poa.lateral };
 }
 
+// The dispersion cone is isotropic in the sight frame, so it is drawn as a
+// sampled ellipse on the back wall rather than a lateral bar. It is measured in
+// centimetres like every other wall measurement, and it is deliberately NOT fed
+// into the layout bounds: at long range the cone is far wider than the lateral
+// drift, and letting it resize the wall would flatten the flight it annotates.
+// When the cone is wider than the drawn wall it is omitted and the readout keeps
+// the number, the same treatment the uncorrected POA ray already gets.
+export function createDispersionCone(impact, radius, bounds = null) {
+  if (!Number.isFinite(radius) || radius <= 0) return null;
+  if (bounds && Math.abs(radius) > bounds.lateralLimit) return null;
+  const heightMin = bounds ? bounds.heightMin : impact.height - radius;
+  const heightMax = bounds ? bounds.heightMax : impact.height + radius;
+  if (bounds && (impact.height + radius < heightMin || impact.height - radius > heightMax)) return null;
+  return { impact, radius, bounds, heightMin, heightMax };
+}
+
+export function dispersionConePoints(cone, samples = 32) {
+  return Array.from({ length: samples }, (_, i) => {
+    const angle = 2 * Math.PI * i / samples;
+    return {
+      ...cone.impact,
+      height: cone.impact.height + cone.radius * Math.sin(angle),
+      lateral: cone.impact.lateral + cone.radius * Math.cos(angle),
+    };
+  });
+}
+
 export function clipReferenceToHeight(reference, heightMin, heightMax) {
   const { origin, endpoint } = reference;
   const delta = endpoint.height - origin.height;
@@ -213,16 +240,22 @@ export function renderTrajectoryChart(chart, solution, options, round) {
     ? `The purple uncertainty envelope samples ${uncertainty.samples.length} weapon cant angles from -${uncertainty.toleranceDegrees}° to +${uncertainty.toleranceDegrees}°, including zero, with the nominal dial settings held fixed. It is a sampled geometric envelope, not a probabilistic confidence interval. Target lateral bounds are ${fmt(uncertainty.target.lateralMin * 100)} to ${fmt(uncertainty.target.lateralMax * 100)} cm.`
     : solution.cantUncertainty ? "Some sampled cant angles cannot reach the selected range; no partial uncertainty band is displayed."
     : `The solution incorporates ${fmt(flight.cantDegrees ?? 0, 1)}° weapon cant; positive cant tilts weapon-up right. Dial corrections are measured in the weapon's tilted elevation/windage axes.`;
-  const readoutDescription = "The color-coded readout beside the back wall uses RISE when corrected impact is above or level with uncorrected POA, and DROP when it is below. Its value and DRIFT are the magnitudes of the actual selected-range plane offsets, even when that POA is off the visible wall. ERROR is the sampled lateral cant uncertainty about corrected nominal impact: ± denotes the error on each side, not the total width; asymmetric bounds are shown separately. Missing forward intersections are unavailable, and disabled or unbounded uncertainty is never reported as zero error.";
+  const readoutDescription = "The color-coded readout beside the back wall uses RISE when corrected impact is above or level with uncorrected POA, and DROP when it is below. Its value and DRIFT are the magnitudes of the actual selected-range plane offsets, even when that POA is off the visible wall. CONE is the full-disc bound of the game's launch dispersion at this range, not a measured group. ERROR is the sampled lateral cant uncertainty about corrected nominal impact: ± denotes the error on each side, not the total width; asymmetric bounds are shown separately. Missing forward intersections are unavailable, and disabled or unbounded uncertainty is never reported as zero error.";
+  const coneModel = solution.targetSpread;
+  const coneRadius = coneModel?.boundRadius;
+  const coneDescription = coneRadius
+    ? `The group cone is the full-disc bound of the game's own launch dispersion at this range: ${fmt(coneRadius * 200, 1)} cm across, from ${fmt(solution.spread.maxMoa, 3)} MOA of authored round, firearm and device mechanical spread. It is an angular bound on a random per-weapon draw, not a predicted group and not reproducible between sessions.${solution.spread.incomplete ? ` This bound omits the un-certified ${solution.spread.missing.join(" and ")} term, so the true figure is at least this wide.` : ""} It is drawn as a sampled ellipse on the back wall, not to the exaggerated lateral scale.`
+    : "Dispersion is not available for this setup.";
   chart.setAttribute("viewBox", `0 0 ${WIDTH} ${HEIGHT}`);
   chart.setAttribute("data-view", "isometric");
   chart.setAttribute("data-flight", "corrected");
   chart.setAttribute("data-cant-mode", options.cantMode ?? "none");
   chart.setAttribute("data-height-max-cm", heightMax * 100);
+  chart.setAttribute("data-cone-radius-cm", coneRadius == null ? "" : coneRadius * 100);
   chart.replaceChildren(
     element("title", { id: "chart-title" }, `${round.name}: corrected isometric trajectory at ${options.targetRange} m, ${options.zeroModel === "unadjusted" ? "no base zero adjustment" : `${options.zeroRange} m base optic setting`}, ${fmt(options.inclinationDegrees, 1)}° firing angle`),
     element("desc", { id: "chart-description" },
-      `The projectile path is simulated after applying ${fmt(solution.target.elevationMrad, 3)} mrad elevation and ${fmt(solution.target.windageMrad, 3)} mrad windage aim correction for ${options.targetRange} meters along the ${fmt(options.inclinationDegrees, 1)}° sight line; the top scope adjustments use the opposite signs. Corrected endpoint height is ${fmt(flight.target.height * 100)} cm and lateral offset is ${fmt(flight.target.lateral * 100)} cm (positive is right), within the numerical solver's tolerance of aim. ${cantDescription} ${heightDescription} Zero height and lateral offset define corrected aim. The straight dashed line is the original uncorrected POA ray, rotated with the weapon into the corrected sight frame using both base and solved launch angles; it is not the corrected aim axis. ${zeroDescription} ${backDescription} ${readoutDescription} The projectile endpoint marks the selected range, not a target object; no flight is extrapolated beyond it. Range-card offsets and times describe the base, uncorrected shot. Isometric sight-relative view with independently exaggerated height and lateral scales. The grid is the zero-height corrected sight plane, not terrain. The blue dashed projection shows the corrected flight's lateral displacement on that plane. The nominal base optic setting is not an imposed trajectory crossing.`),
+      `The projectile path is simulated after applying ${fmt(solution.target.elevationMrad, 3)} mrad elevation and ${fmt(solution.target.windageMrad, 3)} mrad windage aim correction for ${options.targetRange} meters along the ${fmt(options.inclinationDegrees, 1)}° sight line; the top scope adjustments use the opposite signs. Corrected endpoint height is ${fmt(flight.target.height * 100)} cm and lateral offset is ${fmt(flight.target.lateral * 100)} cm (positive is right), within the numerical solver's tolerance of aim. ${cantDescription} ${heightDescription} Zero height and lateral offset define corrected aim. The straight dashed line is the original uncorrected POA ray, rotated with the weapon into the corrected sight frame using both base and solved launch angles; it is not the corrected aim axis. ${zeroDescription} ${backDescription} ${readoutDescription} The projectile endpoint marks the selected range, not a target object; no flight is extrapolated beyond it. Range-card offsets and times describe the base, uncorrected shot, which is a different flight from the corrected one plotted here. Isometric sight-relative view with independently exaggerated height and lateral scales. The grid is the zero-height corrected sight plane, not terrain. The blue dashed projection shows the corrected flight's lateral displacement on that plane. The nominal base optic setting is not an imposed trajectory crossing.`),
     polygon(layout.floor, "chart-plane"),
     polygon(layout.rangePlane.map((point) => ({ ...point, range: options.targetRange })), "range-plane"),
   );
@@ -326,6 +359,14 @@ export function renderTrajectoryChart(chart, solution, options, round) {
     chart.append(region);
   }
   chart.append(element("path", { d: path(flight.points), class: "trajectory" }));
+  const cone = createDispersionCone(flight.target, coneRadius, layout);
+  if (cone) {
+    const group = element("g", { class: "dispersion-cone", "data-radius-cm": cone.radius * 100 });
+    group.append(element("title", {}, coneDescription));
+    group.append(polygon(dispersionConePoints(cone), "dispersion-cone-fill"));
+    group.append(element("path", { d: path(dispersionConePoints(cone, 64)) + " Z", class: "dispersion-cone-edge" }));
+    chart.append(group);
+  }
   const [tx, ty] = project(flight.target);
   const endpoint = element("circle", { cx: tx, cy: ty, r: 5, class: "range-point",
     "data-height-cm": flight.target.height * 100, "data-lateral-cm": flight.target.lateral * 100 });
@@ -349,7 +390,8 @@ export function renderTrajectoryChart(chart, solution, options, round) {
   }
   chart.append(muzzle, endpoint, ...labels);
   const wallCenterY = project({ range: options.targetRange, height: (heightMin + heightMax) / 2, lateral: 0 })[1];
-  const firstRowY = Math.max(84, Math.min(HEIGHT - 94, wallCenterY - 32));
+  // Four measurement rows now share the gutter, so cap the first row lower.
+  const firstRowY = Math.max(84, Math.min(HEIGHT - 126, wallCenterY - 32));
   const readout = element("g", { class: "back-readout", "data-range-m": options.targetRange });
   readout.append(element("title", {}, readoutDescription), element("text", {
     x: READOUT_X, y: firstRowY - 30, class: "back-readout-heading",
@@ -368,6 +410,9 @@ export function renderTrajectoryChart(chart, solution, options, round) {
     { name: "ERROR", kind: "error", value: errorValue, available: Boolean(solution.cantUncertainty),
       title: errorGuide ? `${cantDescription} The width ruler and ERROR label show lateral error about nominal corrected impact, not dial corrections. ± gives each side's error, not total width.`
         : solution.cantUncertainty ? cantDescription : "Cant uncertainty is not enabled. No uncertainty width is assumed." },
+    { name: "CONE", kind: "cone",
+      value: coneRadius ? `${solution.spread.incomplete ? "≥" : ""}${fmt(coneRadius * 200, 0)} cm` : "—",
+      available: Boolean(coneRadius), title: coneDescription },
   ];
   measurements.forEach(({ name, kind, value, available, title }, i) => {
     const y = firstRowY + i * 32;

@@ -7,6 +7,17 @@ const MAX_STEPS = 200000;
 const MIN_SPEED = f(0.1);
 const DEG = Math.PI / 180;
 
+// FistVR.FVRFireArm::Fire (RVA 428892) spawns each projectile from the current
+// muzzle transform displaced by transform.forward * 0.004999999888241291, i.e.
+// the projectile starts 5 mm BEHIND the muzzle. Range is measured from the
+// optical origin, so the muzzle's effective setback is reduced by that recess.
+const SPAWN_RECESS_METRES = f(0.004999999888241291);
+
+// Unity's Random.insideUnitCircle is uniform on the unit disc, so one sample has
+// E|v|^2 = 1/2 and the mean of the three samples Fire draws has E|v|^2 = 1/6.
+// Used to express the game's own three-sample mean as a fraction of its bound.
+const DISPERSION_SAMPLE_RMS = Math.sqrt(1 / 6);
+
 export function evaluateCurve(curve, input) {
   const keys = curve.keys;
   const x = f(input);
@@ -79,6 +90,73 @@ export function muzzleEffects(settings, options) {
   return { dropMoa, verticalDriftMoa, horizontalDriftMoa, pitchDegrees, yawDegrees };
 }
 
+// FistVR.FVRFireArm::Fire (RVA 428892) adds one angular dispersion term to the
+// launch, built from three components that are all in degrees:
+//
+//   round.ProjectileSpread + firearm.m_internalMechanicalMOA
+//                          + GetCombinedMuzzleDeviceAccuracy()
+//
+// multiplied by the mean of three Random.insideUnitCircle samples, and applied
+// straight into the same Transform.Rotate as the fixed drop and drift bias. Both
+// mechanical components are Random.Range(class.MinDegrees, class.MaxDegrees) * 0.5
+// (AM::GetFireArmMechanicalSpread, RVA 888235) drawn ONCE when the object spawns
+// -- FVRFireArm::Awake (RVA 422720) and MuzzleDevice::Awake (RVA 2418581) -- so
+// they are fixed for a session yet not reproducible across sessions. Unlike fixed
+// drift, the firearm contributes its mechanical term even with no device fitted.
+//
+// This model therefore reports the authored bounds of that random draw, never a
+// predicted group. minDegrees/maxDegrees bracket it; the upper bound is the
+// full-disc radius of Fire's own three-sample mean.
+export function dispersion(settings, options, profile) {
+  const half = (degrees) => f(f(degrees) * f(0.5));
+  const entry = (id) => {
+    const value = settings.accuracyClasses?.find((item) => item.id === id);
+    if (!value) throw new Error(`No source mechanical-accuracy entry for class ${id}.`);
+    return { min: half(value.minDegrees), max: half(value.maxDegrees) };
+  };
+  // Anything the dataset does not certify is excluded from the bound and named
+  // in `missing`, so an understated cone is never presented as a complete one.
+  const missing = [];
+  const weapon = options.weapon ?? null;
+  // Unlike fixed drift, the firearm contributes its mechanical term even with
+  // no device fitted, so it matters whenever a weapon is selected at all.
+  const firearm = weapon && Number.isInteger(weapon.accuracyClass)
+    ? entry(weapon.accuracyClass) : null;
+  if (weapon && !firearm) missing.push("selected weapon accuracy class");
+  const devices = (options.attachments ?? []).map((device) => {
+    if (!device || !Number.isInteger(device.accuracyClass))
+      throw new Error(`No verified source accuracy class for ${device?.name ?? "a muzzle device"}.`);
+    return entry(device.accuracyClass);
+  });
+  const sum = (list, key) => list.reduce((total, item) => f(total + item[key]), f(0));
+  const roundKnown = Number.isFinite(profile.spreadDegrees) && profile.spreadDegrees >= 0;
+  if (!roundKnown) missing.push("round spread");
+  const roundDegrees = roundKnown ? profile.spreadDegrees : 0;
+  const minDegrees = f(f(roundDegrees) + f(firearm?.min ?? 0) + sum(devices, "min"));
+  const maxDegrees = f(f(roundDegrees) + f(firearm?.max ?? 0) + sum(devices, "max"));
+  return {
+    roundDegrees, roundKnown, firearm, devices, missing,
+    minDegrees, maxDegrees,
+    // Both are already degrees: a MOA is 1/60 degree, so no radian conversion.
+    minMoa: minDegrees * 60, maxMoa: maxDegrees * 60,
+    incomplete: missing.length > 0,
+    // A per-object random draw, so the group is not predictable from game data.
+    reproducible: false,
+  };
+}
+
+// Lateral/vertical half-extent of the full-disc dispersion bound at a range,
+// and the same figure for the expected radius of Fire's three-sample mean.
+// Linear in range because the source applies the offset as a launch rotation.
+export function dispersionAtRange(model, range) {
+  const bound = range * Math.tan(model.maxDegrees * DEG);
+  return {
+    boundRadius: bound,
+    typicalRadius: bound * DISPERSION_SAMPLE_RMS,
+    boundDiameter: 2 * bound,
+  };
+}
+
 function withCant(ctx, degrees) {
   return { ...ctx, cantDegrees: degrees, cantCos: f(Math.cos(degrees * DEG)), cantSin: f(Math.sin(degrees * DEG)) };
 }
@@ -107,8 +185,9 @@ function trace(ctx, pitch, yaw, ranges) {
   const cy = f(Math.cos(yaw)), sy = f(Math.sin(yaw));
   const ci = ctx.inclinationCos, si = ctx.inclinationSin;
   // The optical origin is the pivot. Spawn offset is along the unperturbed muzzle.
-  const muzzleForward = f(f(f(o.sightSetback - f(0.005)) * cp) + f(f(o.sightHeight) * sp));
-  const muzzleUp = f(f(f(o.sightSetback - f(0.005)) * sp) - f(f(o.sightHeight) * cp));
+  const setback = f(o.sightSetback - SPAWN_RECESS_METRES);
+  const muzzleForward = f(f(setback * cp) + f(f(o.sightHeight) * sp));
+  const muzzleUp = f(f(setback * sp) - f(f(o.sightHeight) * cp));
   const muzzleAlong = f(muzzleForward * cy);
   const muzzleRight = f(muzzleForward * sy);
   // Positive cant tilts weapon-up toward the shooter's right. Roll the entire
@@ -223,45 +302,81 @@ function solvePitch(ctx, range, yaw) {
   throw new Error(`No reachable low-angle firing solution at ${range.toFixed(1)} m with these projectile and scene limits.`);
 }
 
-function solveAim(ctx, range) {
-  let pitch, yaw;
-  if (ctx.cantDegrees !== 0) {
-    // A sideways weapon makes pitch-only height bracketing singular. Seed the
-    // coupled solver by expressing an uncanted solution in weapon-local axes.
-    const seed = solveAim(withCant(ctx, 0), range);
-    const x = Math.cos(seed.pitch) * Math.sin(seed.yaw), y = Math.sin(seed.pitch);
-    const z = Math.cos(seed.pitch) * Math.cos(seed.yaw);
-    const localX = x * ctx.cantCos - y * ctx.cantSin;
-    const localY = y * ctx.cantCos + x * ctx.cantSin;
-    pitch = Math.atan2(localY, Math.hypot(localX, z));
-    yaw = Math.atan2(localX, z);
-  } else {
-    yaw = -ctx.effects.yawDegrees * DEG;
-    pitch = solvePitch(ctx, range, yaw);
-  }
+// Newton refinement of the 2x2 residual (height, lateral) at the target range.
+// Returns the solved angles, or null when it cannot converge inside the
+// iteration/angle budget so the caller can fall back to bracketing.
+function newtonAim(ctx, range, pitch, yaw) {
   // Inclined shots project single-precision world positions back onto the
   // sight line. Allow for cancellation/quantization at roughly eight float32
   // ULPs of range, rather than demanding a sub-ULP trajectory crossing.
   const tolerance = Math.max(0.000001, range * 0.000001);
   for (let i = 0; i < 8; i++) {
     const sample = atRange(ctx, pitch, yaw, range);
-    if (!sample) break;
+    if (!sample) return null;
     if (Math.abs(sample.height) <= tolerance && Math.abs(sample.lateral) <= tolerance) return { pitch, yaw };
     const delta = 0.0001;
     const raised = atRange(ctx, pitch + delta, yaw, range);
     const turned = atRange(ctx, pitch, yaw + delta, range);
-    if (!raised || !turned) break;
+    if (!raised || !turned) return null;
     const a = (raised.height - sample.height) / delta;
     const b = (turned.height - sample.height) / delta;
     const c = (raised.lateral - sample.lateral) / delta;
     const d = (turned.lateral - sample.lateral) / delta;
     const determinant = a * d - b * c;
-    if (!Number.isFinite(determinant) || Math.abs(determinant) < 0.000001) break;
+    if (!Number.isFinite(determinant) || Math.abs(determinant) < 0.000001) return null;
     pitch += (-sample.height * d + sample.lateral * b) / determinant;
     yaw += (sample.height * c - sample.lateral * a) / determinant;
-    if (Math.abs(pitch) > Math.PI / 4 || Math.abs(yaw) > Math.PI / 4) break;
+    if (Math.abs(pitch) > Math.PI / 4 || Math.abs(yaw) > Math.PI / 4) return null;
   }
-  throw new Error(`No continuous low-angle two-axis firing solution at ${range.toFixed(1)} m.`);
+  return null;
+}
+
+// An uncanted aim unit vector expressed in weapon-local pitch/yaw. Exactly the
+// inverse of the roll used to seed the coupled canted solve.
+function localAim(vector, ctx) {
+  const x = vector.x * ctx.cantCos + vector.y * ctx.cantSin;
+  const y = vector.y * ctx.cantCos - vector.x * ctx.cantSin;
+  return { pitch: Math.atan2(y, Math.hypot(x, vector.z)), yaw: Math.atan2(x, vector.z) };
+}
+
+function aimVector(pitch, yaw) {
+  return {
+    x: Math.cos(pitch) * Math.sin(yaw), y: Math.sin(pitch), z: Math.cos(pitch) * Math.cos(yaw),
+  };
+}
+
+// `previous` is the solution for the adjacent lower range. Its uncanted aim
+// vector is a far better starting estimate than the geometric seed, so a range
+// card costs a few Newton traces per row instead of a full bracketing scan.
+// Bracketing stays as the fallback, so a warm start can never change which
+// solution is found or turn an unsolvable case into a fabricated one.
+function solveAim(ctx, range, previous = null) {
+  // The vector is a unit aim direction, so only finiteness marks it usable --
+  // any integer test would reject every seed carrying a nonzero yaw bias.
+  const seeded = previous?.vector;
+  const warm = seeded && [seeded.x, seeded.y, seeded.z].every(Number.isFinite)
+    ? localAim(seeded, ctx) : null;
+  const refined = warm ? newtonAim(ctx, range, warm.pitch, warm.yaw) : null;
+  if (refined) return { ...refined, vector: aimVector(refined.pitch, refined.yaw), seeded: true };
+  let pitch, yaw, vector;
+  if (ctx.cantDegrees !== 0) {
+    // A sideways weapon makes pitch-only height bracketing singular. Seed the
+    // coupled solver by expressing an uncanted solution in weapon-local axes.
+    const seed = solveAim(withCant(ctx, 0), range);
+    vector = seed.vector;
+    const local = localAim(vector, ctx);
+    pitch = local.pitch;
+    yaw = local.yaw;
+  } else {
+    yaw = -ctx.effects.yawDegrees * DEG;
+    pitch = solvePitch(ctx, range, yaw);
+    vector = aimVector(pitch, yaw);
+  }
+  const solved = newtonAim(ctx, range, pitch, yaw)
+    ?? (() => {
+      throw new Error(`No continuous low-angle two-axis firing solution at ${range.toFixed(1)} m.`);
+    })();
+  return { ...solved, vector: aimVector(solved.pitch, solved.yaw), seeded: false };
 }
 
 function validate(profile, options) {
@@ -319,9 +434,22 @@ function cantUncertainty(ctx, aim, plotRanges, nominal) {
   return result;
 }
 
+const fmtRange = (value) => (Number.isInteger(value) ? String(value) : value.toFixed(2));
+
+// Report ranges in the units the user entered. A horizontal request is solved in
+// the along-sight-line range it converts to, and echoing that back would show a
+// number they never typed.
+function statedRange(options) {
+  return Number.isFinite(options.enteredRange) ? options.enteredRange : options.targetRange;
+}
+
 export function calculate(profile, settings, options) {
   options = { inclinationDegrees: 0, attachments: [], cantMode: "none", cantDegrees: 0, cantToleranceDegrees: 0, ...options };
   validate(profile, options);
+  // Resolve dispersion before integrating anything: an uncertified accuracy
+  // class is an input error, and the user should not wait out a full solve to
+  // be told about it.
+  const spread = dispersion(settings, options, profile);
   const ctx = context(profile, settings, options);
   const authoredDrop = options.zeroModel === "game" ? evaluateCurve(options.caliber.opticDropCurve, f(f(options.zeroRange) * f(0.0010000000474974513))) : 0;
   const mathematical = options.zeroModel === "calculated" ? solveAim(ctx, options.zeroRange) : null;
@@ -339,12 +467,24 @@ export function calculate(profile, settings, options) {
   const ranges = [...new Set([...cardRanges, ...plotRanges])].sort((a, b) => a - b);
   const flight = trace(ctx, boreAngle, boreYaw, ranges);
   const byRange = new Map(flight.samples.map((sample) => [sample.range, sample]));
-  if (!byRange.has(options.targetRange)) throw new Error(`The current optic setup cannot reach ${options.targetRange} m. ${flight.reason}`);
+  if (!byRange.has(options.targetRange)) throw new Error(`The current optic setup cannot reach ${fmtRange(statedRange(options))} m. ${flight.reason}`);
   let targetAim;
-  const rows = [...cardRanges].sort((a, b) => a - b).map((range) => {
+  // Ascending ranges, each solve seeded from the one below it. The card is the
+  // dominant cost of a long calculation, and adjacent rows differ by one table
+  // interval, so a chained Newton start converges in a couple of traces.
+  const card = [...cardRanges].sort((a, b) => a - b);
+  const solvedRows = [];
+  // Report how many rows took the warm path. Every row but the first should,
+  // and a shortfall means the seed was rejected rather than converged from.
+  const solve = { rows: card.length, warmStarted: 0 };
+  for (const range of card) {
+    const aim = solveAim(ctx, range, solvedRows.at(-1)?.aim ?? null);
+    if (aim.seeded) solve.warmStarted += 1;
+    solvedRows.push({ range, aim });
+  }
+  const rows = solvedRows.map(({ range, aim: required }) => {
     const sample = byRange.get(range);
     if (!sample) throw new Error(`No primary-flight sample at ${range.toFixed(1)} m. ${flight.reason}`);
-    const required = solveAim(ctx, range);
     if (range === options.targetRange) targetAim = required;
     const elevation = required.pitch - boreAngle, windage = required.yaw - boreYaw;
     return { ...sample, elevationMrad: elevation * 1000, elevationMoa: elevation / DEG * 60, windageMrad: windage * 1000, windageMoa: windage / DEG * 60, isTarget: range === options.targetRange, isSetting: range === settingCardRange };
@@ -356,12 +496,20 @@ export function calculate(profile, settings, options) {
   const correctedTrace = trace(ctx, targetAim.pitch, targetAim.yaw, ranges);
   const correctedByRange = new Map(correctedTrace.samples.map((sample) => [sample.range, sample]));
   const correctedTarget = correctedByRange.get(options.targetRange);
-  if (!correctedTarget) throw new Error(`The corrected flight cannot reach ${options.targetRange} m. ${correctedTrace.reason}`);
+  if (!correctedTarget) throw new Error(`The corrected flight cannot reach ${fmtRange(statedRange(options))} m. ${correctedTrace.reason}`);
   const correctedPoints = [correctedTrace.initial];
   for (const range of plotRanges) { const sample = correctedByRange.get(range); if (sample) correctedPoints.push(sample); }
   const correctedFlight = { points: correctedPoints, target: correctedTarget, boreAngle: targetAim.pitch, boreYaw: targetAim.yaw, cantDegrees: ctx.cantDegrees };
   const uncertainty = options.cantMode === "uncertainty" ? cantUncertainty(ctx, targetAim, plotRanges, correctedFlight) : null;
-  return { muzzleSpeed: ctx.muzzleSpeed, barrelFactor: ctx.barrelFactor, boreAngle, boreYaw, authoredDrop, settingRange, muzzleEffects: ctx.effects, target: rows.find((row) => row.isTarget), rows, points, correctedFlight, cantUncertainty: uncertainty, maxDistance: ctx.maxDistance };
+  // The dispersion offset is a launch rotation, so it moves the corrected shot's
+  // group as well; measure the reported cone at the corrected impact range.
+  const targetSpread = dispersionAtRange(spread, correctedTarget.range);
+  for (const row of rows) {
+    const at = dispersionAtRange(spread, row.range);
+    row.spreadRadius = at.boundRadius;
+    row.spreadTypicalRadius = at.typicalRadius;
+  }
+  return { muzzleSpeed: ctx.muzzleSpeed, barrelFactor: ctx.barrelFactor, boreAngle, boreYaw, authoredDrop, settingRange, muzzleEffects: ctx.effects, target: rows.find((row) => row.isTarget), rows, points, correctedFlight, cantUncertainty: uncertainty, maxDistance: ctx.maxDistance, spread, targetSpread, solve };
 }
 
 export function toCSV(solution, profile, options) {
@@ -395,10 +543,22 @@ export function toCSV(solution, profile, options) {
     ["Sight height m", options.sightHeight], ["Sight setback m", options.sightSetback], ["Effective chamber-to-muzzle distance m", options.barrelLength],
     ["Chamber multiplier", options.chamberMultiplier], ["Shot multiplier", options.velocityMultiplier],
     ["Fixed drop MOA", solution.muzzleEffects.dropMoa], ["Vertical device drift MOA", solution.muzzleEffects.verticalDriftMoa], ["Horizontal device drift MOA", solution.muzzleEffects.horizontalDriftMoa],
+    ["Dispersion round spread degrees", solution.spread.roundDegrees],
+    ["Dispersion firearm mechanical min degrees", solution.spread.firearm?.min ?? ""],
+    ["Dispersion firearm mechanical max degrees", solution.spread.firearm?.max ?? ""],
+    ["Dispersion device mechanical min degrees total", solution.spread.devices.reduce((total, item) => total + item.min, 0)],
+    ["Dispersion device mechanical max degrees total", solution.spread.devices.reduce((total, item) => total + item.max, 0)],
+    ["Dispersion total min degrees", solution.spread.minDegrees], ["Dispersion total max degrees", solution.spread.maxDegrees],
+    ["Dispersion total min MOA", solution.spread.minMoa], ["Dispersion total max MOA", solution.spread.maxMoa],
+    ["Dispersion complete", solution.spread.incomplete ? `no: no extracted value for ${solution.spread.missing.join(", ")}, so the bound omits that term` : "yes"],
+    ["Dispersion interpretation", "Authored bounds of a per-object random draw made in Awake; not a predicted group and not reproducible across sessions. The three-sample mean used by Fire is bounded by the full-disc figure and has an expected radius of 0.408 of it."],
+    ["Dispersion radius at selected range cm", solution.targetSpread.boundRadius * 100],
+    ["Dispersion typical radius at selected range cm", solution.targetSpread.typicalRadius * 100],
+    ["Projectile spawn recess behind muzzle m", SPAWN_RECESS_METRES],
     ["Ballistic gravity m/s^2", options.gravity], ["Fixed tick s", options.fixedStep], ["First fire tick s", options.firstStep], ["Scene limit m", options.sceneLimit], ["Model", MODEL],
     ["Flight interpretation", "Primary centerline; height/lateral offsets in the unrolled sight frame; positive elevation weapon-up, positive windage weapon-right; corrections solved in both axes"],
   ];
   return metadata.map((row) => row.map(quote).join(",")).join("\r\n") + "\r\n\r\n" +
-    "range_m,height_cm,lateral_cm,elevation_mrad,elevation_MOA,windage_mrad,windage_MOA,time_s,velocity_state_m_per_s\r\n" +
-    solution.rows.map((row) => [row.range, row.height * 100, row.lateral * 100, row.elevationMrad, row.elevationMoa, row.windageMrad, row.windageMoa, row.time, row.speed].join(",")).join("\r\n") + "\r\n";
+    "range_m,height_cm,lateral_cm,elevation_mrad,elevation_MOA,windage_mrad,windage_MOA,time_s,velocity_state_m_per_s,dispersion_radius_cm,dispersion_typical_radius_cm\r\n" +
+    solution.rows.map((row) => [row.range, row.height * 100, row.lateral * 100, row.elevationMrad, row.elevationMoa, row.windageMrad, row.windageMoa, row.time, row.speed, row.spreadRadius * 100, row.spreadTypicalRadius * 100].join(",")).join("\r\n") + "\r\n";
 }

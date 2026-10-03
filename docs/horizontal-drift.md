@@ -46,11 +46,11 @@ Using extracted identities/classes:
 - The centerline model gives approximately **2.84 cm right at 100 m**, **14.21 cm right at 500 m**, and roughly **28.4 cm right at 1000 m** from this horizontal angle alone.
 - Removing the registered device gives zero fixed horizontal drift.
 
-These are an example of the source rule, not a claim about the user's unknown loadout. Full prediction also needs actual attachment mounting geometry and optic alignment; random shot dispersion is not included in these offsets.
+These are an example of the source rule, not a claim about the user's unknown loadout. Full prediction also needs actual attachment mounting geometry and optic alignment; shot dispersion is not included in these offsets and is reported separately as a cone.
 
 ## Other causes to distinguish
 
-- **Random dispersion:** `FVRFireArm.Fire` averages three `Random.insideUnitCircle` samples and scales the result by round spread plus firearm and device mechanical spread. This widens a group in both axes rather than imposing a repeatable left/right mean. Firearm/device spread magnitude is initialized in `Awake`, but the random direction is sampled for each projectile.
+- **Random dispersion:** `FVRFireArm.Fire` averages three `Random.insideUnitCircle` samples and scales the result by round spread plus firearm and device mechanical spread. This widens a group in both axes rather than imposing a repeatable left/right mean, which is why it cannot appear as a signed mean. The random direction is sampled per projectile; the firearm and device **magnitudes** are each drawn once in `Awake`, so the group is fixed within a session but not reproducible across sessions. The calculator therefore reports the authored bounds of that draw as a cone rather than a simulated group; see [dispersion and spawn-offset notes](dispersion.md).
 - **Optic alignment/windage:** sight geometry and windage adjustments can shift the aiming line. `PIPScope.UpdateZero` applies two-axis scope/reticle adjustments; `ReflexSightController.Zero` explicitly uses `ReticleWindageMagnitude` and `ReticleWindageAdjustmentPerTick`.
 - **Cant:** gun/optic roll can make world-down gravity and zero compensation appear partly sideways relative to the reticle. This is distinct from uphill/downhill pitch. The calculator's firing-angle control is pitch, not roll.
 - **Special flight behavior or mods:** these conclusions cover the standard pre-impact `BallisticProjectile` path, not ricochets, guidance, additional projectile controllers, or mods.

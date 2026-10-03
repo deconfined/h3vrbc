@@ -78,12 +78,81 @@ test("corrected flight retraces the solved launch without replacing the base tra
     close(corrected.target.lateral, 0, 0.001);
     assert.ok(Math.abs(result.target.height) > 0.1);
     assert.notDeepEqual(corrected.points, result.points);
+    // A calculated zero at the same range reaches aim by an independent solve.
+    // Both land inside the solver's own tolerance, so they may differ by up to
+    // twice it; an independently seeded solve cannot agree bit for bit.
     const equivalent = calculate(profile, settings, { ...options, zeroModel: "calculated", zeroRange: options.targetRange });
-    assert.deepEqual(corrected.points, equivalent.points,
-      "The corrected path must match the actual integrator at the solved launch angles");
+    const residual = Math.max(...corrected.points.map((point, index) => Math.max(
+      Math.abs(point.height - equivalent.correctedFlight.points[index].height),
+      Math.abs(point.lateral - equivalent.correctedFlight.points[index].lateral),
+    )));
+    const tolerance = Math.max(0.000001, options.targetRange * 0.000001);
+    assert.ok(residual <= 2 * tolerance,
+      `corrected path drifted ${residual} m from the integrator at the solved launch angles, twice the ${tolerance} m solver tolerance`);
+    // Determinism still has to be exact for the same options, since the worker
+    // round-trip and the interface snapshot both depend on it.
+    assert.deepEqual(calculate(profile, settings, options), result);
     assert.equal(result.target, result.rows.find((row) => row.isTarget));
     assert.ok(toCSV(result, profile, options).includes(`${result.target.height * 100},${result.target.lateral * 100}`));
   }
+});
+
+test("chaining a card solve from its neighbour does not change the solution", () => {
+  // With one card row the target is solved cold by bracketing; with four it is
+  // warm-started from the row below it. Both must reach the same aim, so the
+  // speed-up never trades accuracy or, worse, a different low-angle branch.
+  for (const inclinationDegrees of [-60, 0, 60]) {
+    const base = { ...setup, targetRange: 300, inclinationDegrees };
+    const cold = calculate(profile, settings, { ...base, rangeStep: 300 });
+    const chained = calculate(profile, settings, { ...base, rangeStep: 100 });
+    // The card also carries the optic-setting row, which the setup's authored
+    // drop places just beyond the last interval.
+    assert.equal(cold.rows.length, 2);
+    assert.equal(chained.rows.length, 4);
+    // Each solve only has to place the projectile inside the solver's own
+    // tolerance, so the two seeds may land anywhere in that band. Express the
+    // bound rather than demanding the identical angle.
+    const tolerance = Math.max(0.000001, base.targetRange * 0.000001);
+    close(chained.correctedFlight.target.height, cold.correctedFlight.target.height, 2 * tolerance);
+    close(chained.correctedFlight.target.lateral, cold.correctedFlight.target.lateral, 2 * tolerance);
+    close(chained.target.elevationMrad, cold.target.elevationMrad, 2 * tolerance / base.targetRange * 1000);
+    close(chained.target.windageMrad, cold.target.windageMrad, 2 * tolerance / base.targetRange * 1000);
+    // The target row's own base-flight sample is a shared trace, not a solve,
+    // so it must be bit-identical across both cards.
+    close(chained.target.height, cold.target.height, 1e-12);
+    close(chained.target.lateral, cold.target.lateral, 1e-12);
+  }
+});
+
+test("chaining works for a nonzero device yaw bias, not only a centered shot", () => {
+  // The seed is a unit aim direction, so its lateral component is an arbitrary
+  // tiny number whenever a fitted device biases yaw. Guarding the seed on
+  // integrality would silently skip the whole speed-up for exactly the shots
+  // that carry the most device bias, so cover it explicitly.
+  const settingsWithClasses = { ...settings, accuracyClasses: [
+    { id: 33, dropMult: 0.8999999761581421, driftMult: 2 },
+    { id: 100, dropMult: 1.100000023841858, driftMult: 2 },
+  ] };
+  // A verified identity pair is what produces a lateral bias to compensate.
+  const common = {
+    ...setup, targetRange: 400,
+    weapon: { name: "M4Carbine", hashId: "M4Carbine", accuracyClass: 33 },
+    attachments: [{ name: "SuppressorMk12", hashId: "SuppressorMk12", accuracyClass: 100, kind: "suppressor" }],
+  };
+  const cold = calculate(profile, settingsWithClasses, { ...common, rangeStep: 400 });
+  const chained = calculate(profile, settingsWithClasses, { ...common, rangeStep: 100 });
+  assert.ok(Math.abs(cold.rows.at(-1).lateral) > 0.01, "the base shot must actually drift sideways");
+  // The first row is always solved cold; every row after it must take the warm
+  // path. An integer guard on the seed's lateral component rejects exactly the
+  // sideways-bias shots this fixture builds, so this asserts the path, not just
+  // the answer the two paths agree on anyway.
+  assert.equal(cold.solve.warmStarted, cold.rows.length - 1);
+  assert.equal(chained.solve.warmStarted, chained.rows.length - 1);
+  assert.ok(chained.solve.rows > cold.solve.rows);
+  const tolerance = Math.max(0.000001, common.targetRange * 0.000001);
+  close(chained.correctedFlight.target.lateral, cold.correctedFlight.target.lateral, 2 * tolerance);
+  close(chained.correctedFlight.target.height, cold.correctedFlight.target.height, 2 * tolerance);
+  close(chained.target.windageMrad, cold.target.windageMrad, 2 * tolerance / common.targetRange * 1000);
 });
 
 test("flight multiplier changes displacement and flight time, not the drag velocity state", () => {

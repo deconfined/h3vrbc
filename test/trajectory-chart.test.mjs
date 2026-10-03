@@ -484,7 +484,7 @@ test("wall measurements use a separate aligned gutter even for downward offsets 
       assert.ok(Number(label.getAttribute("x")) > wallRight + 20, "Labels must be beside, not on, the back wall");
       assert.ok(Number(label.getAttribute("x")) >= 760, "Even a reference extending beyond the wall cannot overlap the readout");
     }
-    assert.equal(svg.querySelectorAll(".back-readout-row").length, 3);
+    assert.equal(svg.querySelectorAll(".back-readout-row").length, 4);
     assert.equal(svg.querySelector(".back-error-label").textContent, "ERROR · —");
     assert.equal(svg.querySelector(".back-readout-heading").textContent, "300 m / BACK WALL");
   }
@@ -531,7 +531,7 @@ test("the isometric chart applies both corrections while the range card retains 
   assert.equal($("trajectory-chart").dataset.view, "isometric");
   assert.equal(Number($("trajectory-chart").querySelector(".range-point").dataset.lateralCm), 0);
   assert.equal($("trajectory-chart").dataset.flight, "corrected");
-  assert.equal(dom.window.document.querySelector(".chart-heading h2").textContent, "Corrected trajectory");
+  assert.match(dom.window.document.querySelector(".chart-heading h2").textContent, /^Corrected trajectory/);
   assert.match(dom.window.document.querySelector(".chart-note").textContent, /simulated after applying/);
   assert.match(dom.window.document.querySelector(".legend").textContent, /Uncorrected POA/);
   set("weapon", "Rifle");

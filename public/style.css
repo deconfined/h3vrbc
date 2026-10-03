@@ -413,6 +413,28 @@ select {
   font: 10px var(--mono);
   line-height: 1.5;
 }
+/* Marks which of the two simulated shots a number belongs to, so the chart's
+   corrected flight and the table's base shot cannot be read as one result. */
+.shot-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  color: var(--muted);
+  font: 8px var(--mono);
+  letter-spacing: 1px;
+  vertical-align: middle;
+  text-transform: uppercase;
+}
+.solving-note {
+  margin: 0 0 4px;
+  color: var(--muted);
+  font: 10px var(--mono);
+}
+.sub-label {
+  margin-top: 10px;
+}
 .chart-panel {
   padding: 22px;
   margin-bottom: 20px;
@@ -798,6 +820,18 @@ footer {
   stroke: currentColor;
   stroke-width: 2;
 }
+.dispersion-cone-fill {
+  fill: #d8a657;
+  fill-opacity: 0.13;
+  stroke: none;
+}
+.dispersion-cone-edge {
+  fill: none;
+  stroke: #d8a657;
+  stroke-opacity: 0.75;
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
 .trajectory-shadow {
   fill: none;
   stroke: #71b1be;
@@ -858,6 +892,11 @@ footer {
 .back-error-label,
 .back-error-key {
   color: #aa9fdd;
+}
+.dispersion-cone,
+.back-cone-label,
+.back-cone-key {
+  color: #d8a657;
 }
 .back-readout-heading {
   fill: var(--muted);

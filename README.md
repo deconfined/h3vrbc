@@ -96,7 +96,7 @@ The left menu has independently expandable sections:
 1. **Simulation:** choose a scene, projectile limit, and gravity mode. Timing and world-height inputs are available under the advanced controls.
 2. **Weapon & ammunition:** search for a weapon and supported round. Select a chamber/barrel for multi-chamber weapons and set charge for supported sticky shots. Weapon presets fill verified geometry and firing multipliers.
 3. **Muzzle devices:** search suppressors, brakes, extenders, and other devices, then add them to the loadout. Match the game's registration order using Earlier/Later controls. Stock geometry treats this as an inner-to-outer mount chain.
-4. **Sight & range:** choose an optic preset and a matching direct weapon mount to fill sight geometry and the authored default zero setting, or enter values manually. Sliding rails default to an **assumed midpoint (50%)**, adjustable from rear (0%) to front (100%). Sight height and setback describe the **bare weapon muzzle**; device geometry supplies the effective adjustment. Set firing angle, weapon cant mode, target range, and range-card interval.
+4. **Sight & range:** choose an optic preset and a matching direct weapon mount to fill sight geometry and the authored default zero setting, or enter values manually. Sliding rails default to an **assumed midpoint (50%)**, adjustable from rear (0%) to front (100%). Sight height and setback describe the **bare weapon muzzle**; device geometry supplies the effective adjustment. Set firing angle, weapon cant mode, target range with its measurement unit, and range-card interval.
 5. **Manual overrides:** supply missing values or adjust geometry and velocity multipliers for your setup.
 
 Click **Calculate solution** after changing the firing setup. Changes invalidate the previous solution and CSV export. Browsing weapon or device candidates and opening or closing sections preserve the current calculation.
@@ -105,13 +105,74 @@ The **isometric 2.5D chart** shows the projectile flight **after applying the so
 
 The projectile endpoint marks the selected distance, not a target object. The game's nominal base zero does not guarantee a crossing for the uncorrected flight; **Calculated zero** does. Neither requires the corrected flight to cross at the base-zero distance when solving for a different range. Height and lateral scales are independently exaggerated and automatically scaled, not a to-scale scene. The height ceiling is the **highest plotted projectile sample**, including cant probes when enabled; the uncorrected POA cannot stretch it upward. Flat flight keeps a finite height span below the zero-height sight plane. The grid represents that **corrected sight plane**, not terrain; the blue dashed plane projection shows the corrected flight's lateral displacement. Range/lateral bounds still account for the rotated optic reference. On narrow screens, scroll the chart horizontally.
 
-When the uncorrected ray intersects the displayed back wall at the selected range, a separate POA marker and L-shaped height/lateral guides show its separation from corrected impact. Both legs remain on that plane. A readout **beside** the wall shows **RISE** when corrected impact is above or level with uncorrected POA, or **DROP** when below, alongside **DRIFT** and **ERROR**, color-coded to their measurement lines. Height/lateral values are geometric distance magnitudes in centimetres, not elevation/windage dial settings; tooltips give signed changes toward corrected POI. ERROR gives sampled lateral cant uncertainty in cm: **± is per side**, while asymmetric left/right bounds are listed separately. Its purple width ruler sits below the impact region on the wall to avoid masking the lateral guide. Off-wall intersections get no marker or offset guides, but their actual plane distances remain in the side readout. Missing finite forward intersections show **—**. Disabled uncertainty also shows **—**, and incomplete uncertainty shows **UNBOUNDED**, never a misleading zero width.
+When the uncorrected ray intersects the displayed back wall at the selected range, a separate POA marker and L-shaped height/lateral guides show its separation from corrected impact. Both legs remain on that plane. A readout **beside** the wall shows **RISE** when corrected impact is above or level with uncorrected POA, or **DROP** when below, alongside **DRIFT**, **ERROR** and **CONE**, color-coded to their measurement lines. Height/lateral values are geometric distance magnitudes in centimetres, not elevation/windage dial settings; tooltips give signed changes toward corrected POI. ERROR gives sampled lateral cant uncertainty in cm: **± is per side**, while asymmetric left/right bounds are listed separately. Its purple width ruler sits below the impact region on the wall to avoid masking the lateral guide. Off-wall intersections get no marker or offset guides, but their actual plane distances remain in the side readout. Missing finite forward intersections show **—**. Disabled uncertainty also shows **—**, and incomplete uncertainty shows **UNBOUNDED**, never a misleading zero width. CONE always keeps its figure; it is drawn on the wall only when it fits, so a long-range cone never rescales the flight it annotates.
+
+The calculator simulates **two distinct shots**, and labels which is which on every
+number it shows. The **base shot** is what the projectile does at the optic's own
+setting, with no correction applied; that is the whole range card and the
+**Export CSV** body. The **corrected shot** is a separate re-integration at the
+solved aim angles for the selected range; that is what the isometric chart
+plots, and the **CORRECTED IMPACT** metric reports. The flight time in the table
+is therefore not the flight time of the plotted curve. Their offsets, times and
+speeds differ, and only the corrected flight is aimed at the target.
 
 The top **ELEVATION ADJUSTMENT** and **WINDAGE ADJUSTMENT** callouts give the required scope/reticle setting changes from the base zero in mrad and MOA. Their signs are **the inverse of the solved aim corrections**, not instructions to raise/lower aim. With specific cant, they use the weapon's tilted elevation/windage axes.
 
-The range card and **Export CSV** retain the **uncorrected** offsets, time and speed at the base optic setting, alongside the original aim corrections: positive elevation means raise aim; positive windage means aim right. Positive lateral point of impact means the uncorrected projectile is right of the aim point in the unrolled sight frame. The solver, corrected flight, and CSV range-card signs/columns remain unchanged; metadata also records cant assumptions and selected-range uncertainty bounds.
+The range card and **Export CSV** retain the **uncorrected** offsets, time and speed at the base optic setting, alongside the original aim corrections: positive elevation means raise aim; positive windage means aim right. Positive lateral point of impact means the uncorrected projectile is right of the aim point in the unrolled sight frame. Metadata also records cant assumptions, selected-range uncertainty bounds, and every dispersion component with its interpretation.
 
 For unverified mounting, choose measured muzzle geometry, enter the mounted distance and forward/up shifts, and confirm them before calculating. Selecting a device does not establish physical compatibility with the weapon.
+
+### Group dispersion
+
+The game perturbs each projectile's launch with an angular offset drawn once per
+spawned weapon and device, not once per shot. The calculator cannot predict the
+group a session will print, so it reports the **authored bounds** of that draw
+instead of a simulated group.
+
+The **GROUP CONE** metric, the chart's **CONE** readout, the range card's **Cone
+Ø** column and the CSV all show the same figure: the full-disc bound of the
+game's own three-sample dispersion mean at that range, in cm, computed from the
+round's authored `spreadDegrees` plus the firearm's and every fitted device's
+mechanical accuracy class. It grows linearly with range and is **not** folded
+into the centreline — the chart and the range card describe the same
+centerline shot either way. The accompanying detail line gives the angular bound
+in MOA and the expected radius of the game's three-sample mean (about 0.41 of
+the bound).
+
+Three things it is not:
+
+- **Not a predicted group.** The firearm and each device draw
+  `Random.Range(class.MinDegrees, class.MaxDegrees) / 2` once in `Awake`, so the
+  value is fixed for a session but differs in the next one. A mid-session
+  weapon can print a different bound than the table does.
+- **Not a confidence interval.** No group size, per-shot sample or probability
+  distribution is claimed.
+- **Not always complete.** If the selected weapon has no extracted accuracy
+  class, or a round has no extracted spread, that term is excluded rather than
+  treated as zero and the figure is prefixed **≥** and named in the detail line
+  and CSV metadata.
+
+The **MRAD** with no device fitted bounds at 0.3 MOA, roughly 10.5 cm across at
+600 m; adding a suppressor on the 1.5 MOA `SuppressorOld` class raises that to
+1.05 MOA, 36.7 cm at 600 m and 73.3 cm at 1200 m. On a long-range scene, this
+is typically larger than the drop the chart spends its vertical scale on, which
+is the point: report both rather than let the centerline imply precision the
+game will not deliver. See [dispersion and spawn-offset notes](docs/dispersion.md).
+
+### Range measurement
+
+The solve always works in distance **along the sight line** from the optical
+origin. **Measured as** converts the request:
+
+- **Along the sight line** (default): what the model integrates. Every table row
+  and the CSV use this convention.
+- **Horizontal distance:** divided by the cosine of the firing angle, so entering
+  the horizontal range of a target gives the same solution as entering its
+  sight-line distance. At ±90° a horizontal range is undefined and the request is
+  refused rather than silently reported as unreachable.
+
+The chart and the range card remain in sight-line range; only the input and the
+target label change.
 
 ### Weapon cant
 
@@ -153,11 +214,11 @@ Cookie storage is limited. If the browser blocks a write or the saved data excee
 
 ## Model scope
 
-The model reproduces the inspected free-flight update, including gravity before drag, the game's Mach-dependent drag curve, single-precision state updates, caliber velocity curves, optic zeroing rules, and fixed muzzle-device launch bias.
+The model reproduces the inspected free-flight update, including gravity before drag, the game's Mach-dependent drag curve, single-precision state updates, caliber velocity curves, optic zeroing rules, and fixed muzzle-device launch bias. The projectile spawns 5 mm behind the muzzle transform, matching `Fire`'s own `transform.forward * 0.005f` offset, which puts the optical origin 5 mm ahead of the muzzle plane.
 
 Modern PIP scope/reflex zeroing uses the caliber's authored drop curve. The nominal optic distance does not force the selected projectile through the sight line at that range. **Calculated zero** separately solves a crossing for the chosen projectile and setup.
 
-The base setup assumes a centered optic with no initial dial trim. The weapon is level unless specific cant is selected; the corrected chart applies the solved target-range adjustments and optional fixed-dial cant uncertainty. The model does not simulate impacts, penetration, ricochets, random spread, wind, Coriolis, spin drift, guided projectiles, or modded behavior. Multi-projectile rounds show one centerline projectile; submunition paths are excluded. Unsupported projectile integrators appear in the unavailable-projectile list.
+The base setup assumes a centered optic with no initial dial trim. The weapon is level unless specific cant is selected; the corrected chart applies the solved target-range adjustments and optional fixed-dial cant uncertainty. The model does not simulate impacts, penetration, ricochets, wind, Coriolis, spin drift, guided projectiles, or modded behavior. Launch dispersion is reported as an authored bound rather than sampled or simulated. Multi-projectile rounds show one centerline projectile; submunition paths are excluded. Unsupported projectile integrators appear in the unavailable-projectile list.
 
 Stock geometry reflects authored prefab poses, rather than live animations. The model is source-derived and has not yet been validated against live VR shots; timing, scene settings, and mounting geometry can affect agreement.
 
@@ -168,12 +229,19 @@ npm test
 npm run test:extract
 ```
 
-The JavaScript suite covers physics, weapon/device behavior, chart projection and rendering, UI validation, favorites, and interface persistence. Fixture tests run without a game installation; integration checks using the generated dataset are skipped when it is absent. Python tests cover prefab transforms and extraction rules; assembly-backed checks require `game_data/h3vr_Data/Managed/Assembly-CSharp.dll` and otherwise skip.
+The JavaScript suite covers physics, dispersion, weapon/device behavior, chart projection and rendering, UI validation, favorites, and interface persistence. Fixture tests run without a game installation; integration checks using the generated dataset are skipped when it is absent. Python tests cover prefab transforms and extraction rules; assembly-backed checks require `game_data/h3vr_Data/Managed/Assembly-CSharp.dll` and otherwise skip.
+
+### Solve cost
+
+The solve runs in a module Web Worker where the browser provides one, so a long calculation does not block the page; the elapsed time and which path ran are reported under the metrics. Without worker support it falls back to the same `solve()` entry point called inline, so results are identical either way.
+
+Two things drive the cost, both under the user's control. Each range-card row is an independent aim solve, so a small table interval over a long range is the dominant term; consecutive rows are warm-started from the row below, which cuts a card from roughly 50 trajectory integrations per row to a couple. Separately, integration cost scales with `1/tick` while accuracy scales with `tick`, so the fixed-tick field has a real price. On this machine, a 1200 m shot with a 300-row card takes about 65 ms at the extracted 11.1 ms tick, 271 ms at 0.5 ms, and 1.3 s at 0.1 ms.
 
 | Location | Purpose |
 | --- | --- |
 | `public/index.html`, `public/style.css`, `public/app.js` | Browser interface and interactions |
-| `public/physics.js` | Projectile model, solutions, and CSV generation |
+| `public/physics.js` | Projectile model, dispersion, solutions, and CSV generation |
+| `public/solver-worker.js` | Off-main-thread solve host and its shared entry point |
 | `public/trajectory-chart.js` | Sight-relative isometric SVG chart |
 | `public/weapons.js`, `public/muzzle-devices.js` | Weapon presets, device search, and mounting geometry |
 | `public/optics.js` | Optic search, direct mount matching, and bare-muzzle sight defaults |
@@ -186,6 +254,7 @@ Additional model notes:
 
 - [Muzzle-device inventory and mounting rules](docs/muzzle-devices.md)
 - [Horizontal-drift investigation](docs/horizontal-drift.md)
+- [Launch dispersion and the projectile spawn offset](docs/dispersion.md)
 - [Optic defaults and optical-origin extraction](docs/optics.md)
 - [Weapon cant and fixed-dial uncertainty](docs/weapon-cant.md)
 

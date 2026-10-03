@@ -1,10 +1,11 @@
-import { MODEL, calculate, muzzleEffects, toCSV } from "./physics.js";
+import { MODEL, muzzleEffects, toCSV } from "./physics.js";
 import { searchWeapons, weaponPreset } from "./weapons.js";
 import { deviceKindLabel, muzzleGeometry, searchMuzzleDevices } from "./muzzle-devices.js";
 import { compatibleOpticMounts, opticGeometry, searchOptics, slidingOpticMount } from "./optics.js";
 import { createFavoriteStore } from "./favorites.js";
 import { createInterfaceStore } from "./interface-state.js";
 import { renderTrajectoryChart } from "./trajectory-chart.js";
+import { solve } from "./solver-worker.js";
 
 const $ = (id) => document.getElementById(id);
 const form = $("setup-form");
@@ -30,6 +31,45 @@ const presetFields = [
 ];
 let currentSolution = null;
 let currentOptions = null;
+let worker = null;
+let workerFailed = false;
+let solveToken = 0;
+
+function solverHost() {
+  if (workerFailed || typeof Worker !== "function") return null;
+  if (!worker) {
+    try {
+      worker = new Worker(new URL("./solver-worker.js", import.meta.url), { type: "module" });
+      worker.addEventListener("error", () => {
+        // Fall back permanently rather than stalling on a worker that will not load.
+        workerFailed = true;
+        worker?.terminate();
+        worker = null;
+      });
+    } catch {
+      workerFailed = true;
+      return null;
+    }
+  }
+  return worker;
+}
+
+const postToWorker = (host, request, resolve, reject) => {
+  const onMessage = (event) => {
+    host.removeEventListener("message", onMessage);
+    host.removeEventListener("error", onError);
+    resolve(event.data);
+  };
+  const onError = () => {
+    host.removeEventListener("message", onMessage);
+    host.removeEventListener("error", onError);
+    reject(new Error("The background solver could not run. Calculate again to solve in this tab."));
+  };
+  host.addEventListener("message", onMessage);
+  host.addEventListener("error", onError);
+  host.postMessage(request);
+};
+
 const fmt = (value, digits = 2) => Number(value).toFixed(digits);
 const option = (value, label) => {
   const element = document.createElement("option");
@@ -59,6 +99,7 @@ function invalidate(
   currentSolution = null;
   $("solution").hidden = true;
   $("export-csv").disabled = true;
+  $("calculation-time").textContent = "";
   $("calculation-error").textContent = message;
   $("calculation-error").hidden = false;
 }
@@ -244,9 +285,10 @@ function interfaceProblem(state) {
   if (values.optic && (!optic || values["optic-mount"] && !compatibleOpticMounts(weapon, optic)
     .some(({ index }) => String(index) === values["optic-mount"])))
     return "The remembered setup could not be restored: an optic or direct weapon mount is no longer available.";
-  for (const id of ["scene", "gravity", "zero-model", "muzzle-geometry-mode", "muzzle-kind"]) {
-    if (![...$(id).options].some((item) => item.value === values[id]))
-      return "The remembered setup could not be restored: a selected setting is no longer available.";
+for (const id of ["scene", "gravity", "zero-model", "muzzle-geometry-mode", "muzzle-kind", "range-mode"]) {
+    // Snapshots saved before a control existed simply leave it at its default.
+    if (Object.hasOwn(values, id) && ![...$(id).options].some((item) => item.value === values[id]))
+      return "The remembered interface could not be restored: a selected setting is no longer available.";
   }
   if (Object.hasOwn(values, "cant-mode") && ![...$("cant-mode").options].some((item) => item.value === values["cant-mode"]))
     return "The remembered setup could not be restored: a selected cant mode is no longer available.";
@@ -825,6 +867,18 @@ function updateCantControls() {
   $("cant-tolerance").disabled = mode !== "uncertainty";
 }
 
+// Horizontal range is the along-sight-line range divided by cos(inclination):
+// the sight ray makes that angle with the world horizontal. Straight up or
+// down has no horizontal component, so a horizontal request is refused there
+// rather than silently reported as an unreachable range.
+function sightLineRange(entered, mode, inclinationDegrees) {
+  if (mode !== "horizontal") return entered;
+  const cosine = Math.cos(inclinationDegrees * Math.PI / 180);
+  if (!(Math.abs(cosine) > 1e-9))
+    throw new Error("A horizontal target range is undefined at a ±90° firing angle. Measure along the sight line instead.");
+  return entered / cosine;
+}
+
 function readOptions() {
   const values = new FormData(form);
   const scene = data.scenes.find((item) => item.file === $("scene").value);
@@ -866,7 +920,12 @@ function readOptions() {
     velocityMultiplier: Number(values.get("velocityMultiplier")),
     sightHeight: Number(values.get("sightHeight")) / 100 - geometry.upShift,
     sightSetback: Number(values.get("sightSetback")) / 100 + geometry.forwardShift,
-    targetRange: Number(values.get("targetRange")),
+    // The model works in sight-line range. A horizontal request is converted
+    // here so nothing downstream has to know the user picked the other unit.
+    targetRange: sightLineRange(Number(values.get("targetRange")), values.get("rangeMode") ?? "sight",
+      Number(values.get("inclinationDegrees"))),
+    enteredRange: Number(values.get("targetRange")),
+    rangeMode: values.get("rangeMode") ?? "sight",
     rangeStep: Number(values.get("rangeStep")),
     gravity: Number(values.get("gravity")),
     sceneLimit: Number(values.get("sceneLimit")),
@@ -895,11 +954,22 @@ function render(solution, options, round) {
     `${scopeValue(solution.target.windageMoa, 2)} MOA · ${Math.abs(solution.target.windageMrad) < 0.0000001 ? "no windage adjustment" : scopeSetting}`;
   $("lateral-label").textContent = `Base POI: ${directional(solution.target.lateral * 100, "cm", "right", "left", 2)} of POA`;
   $("flight-time").textContent = fmt(solution.target.time, 3);
-  $("target-label").textContent =
-    `${options.targetRange} m along sight line · ${fmt(options.inclinationDegrees, 1)}°`;
+  $("target-label").textContent = `${fmt(options.enteredRange, 1)} m ${options.rangeMode === "horizontal" ? "horizontal" : "along sight line"} · ${fmt(options.inclinationDegrees, 1)}° sight line`;
   $("muzzle-speed").textContent = fmt(solution.muzzleSpeed, 1);
   $("barrel-factor").textContent =
     `${fmt(solution.barrelFactor, 3)}× barrel curve`;
+  // The chart plots the corrected shot; say so next to the numbers a reader is
+  // most likely to mistake for the plotted flight.
+  $("corrected-impact").textContent = fmt(solution.correctedFlight.target.height * 100, 2);
+  $("corrected-detail").textContent =
+    `${fmt(Math.abs(solution.correctedFlight.target.lateral) * 100, 2)} cm ${Math.abs(solution.correctedFlight.target.lateral) < 0.0000001 ? "centered" : solution.correctedFlight.target.lateral > 0 ? "right" : "left"} of aim in ${fmt(solution.correctedFlight.target.time, 3)} s`;
+  const spread = solution.spread;
+  const missing = spread.incomplete
+    ? ` At least this: ${spread.missing.join(" and ")} not certified, so the bound omits that term.`
+    : "";
+  $("spread-diameter").textContent = spread.incomplete ? `≥${fmt(solution.targetSpread.boundDiameter * 100, 1)}` : fmt(solution.targetSpread.boundDiameter * 100, 1);
+  $("spread-detail").textContent =
+    `${fmt(spread.maxMoa, 3)} MOA bound · typical ${fmt(solution.targetSpread.typicalRadius * 100, 1)} cm radius. Random per weapon, not a predicted group.${missing}`;
   $("zero-label").textContent =
     options.zeroModel === "unadjusted"
       ? "No base zero adjustment · bore 0° relative to sight"
@@ -928,6 +998,7 @@ function render(solution, options, round) {
       fmt(row.windageMoa, 2),
       fmt(row.time, 3),
       fmt(row.speed, 1),
+      spread.incomplete ? `≥${fmt(row.spreadRadius * 200, 1)}` : fmt(row.spreadRadius * 200, 1),
     ];
     for (const value of values) {
       const td = document.createElement("td");
@@ -949,15 +1020,31 @@ async function runCalculation(event) {
   submit.disabled = true;
   const label = submit.innerHTML;
   submit.textContent = "Calculating…";
+  const started = performance.now();
   await new Promise((resolve) => requestAnimationFrame(resolve));
+  // A worker needs a real module-worker scope. Where it is missing or refused,
+  // solve() is the same function called inline, so results never diverge.
+  const host = solverHost();
+  const run = host
+    ? (request) => new Promise((resolve, reject) => postToWorker(host, request, resolve, reject))
+    : async (request) => solve(request);
+  const token = ++solveToken;
   try {
     const round = selectedRound();
     const options = readOptions();
-    const result = calculate(round, data.settings, options);
-    render(result, options, round);
-    currentSolution = result;
+    const response = await run({ profile: round, settings: data.settings, options });
+    // Ignore a result the user has already invalidated by changing the setup.
+    if (token !== solveToken) return;
+    if (!response.ok) throw new Error(response.message);
+    render(response.solution, options, round);
+    currentSolution = response.solution;
     currentOptions = options;
+    $("calculation-time").textContent = [
+    `${Math.round(performance.now() - started)} ms${host ? " · worker" : " · inline"}`,
+    `${response.solution.solve.warmStarted}/${response.solution.solve.rows - 1} table solves warm-started`,
+  ].join(" · ");
   } catch (error) {
+    if (token !== solveToken) return;
     invalidate(error.message);
   } finally {
     submit.innerHTML = label;
