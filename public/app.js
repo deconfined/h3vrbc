@@ -7,6 +7,7 @@ import { createInterfaceStore } from "./interface-state.js";
 import { renderTrajectoryChart } from "./trajectory-chart.js";
 import { clickMradFromDegrees, fmt, formatDialedSetting } from "./format.js";
 import { solve } from "./solver-worker.js";
+import { modById, modNote, modSearchText, modSuffix, modSummary } from "./mods.js";
 
 const $ = (id) => document.getElementById(id);
 const form = $("setup-form");
@@ -17,6 +18,8 @@ let roundById;
 let weaponById;
 let muzzleDeviceById;
 let opticById;
+let modsById = new Map();
+const modText = (item) => modSearchText(item, modsById);
 let muzzleDevices = [];
 const favoriteStore = createFavoriteStore(document);
 let favorites = [];
@@ -143,10 +146,10 @@ function usesOpticGeometry(geometry) {
 
 function filterOptics() {
   const previous = $("optic").value;
-  const matches = searchOptics(data.optics ?? [], $("optic-search").value);
+  const matches = searchOptics(data.optics ?? [], $("optic-search").value, modText);
   const selected = opticById.get(previous);
   const pinned = selected && !matches.some((item) => item.id === previous);
-  const label = (item) => `${item.name} · ${item.kind === "scope" ? "PIP scope" : "Reflex"} · ${item.mountTypeName}`;
+  const label = (item) => `${item.name}${modSuffix(item, modsById)} · ${item.kind === "scope" ? "PIP scope" : "Reflex"} · ${item.mountTypeName}`;
   $("optic").replaceChildren(option("", "Manual sight geometry"),
     ...(pinned ? [option(selected.id, `Selected: ${label(selected)}`)] : []),
     ...matches.map((item) => option(item.id, label(item))));
@@ -175,7 +178,7 @@ function showOpticNote() {
   $("optic-note").textContent = `${geometry.reason ? `${geometry.reason} Enter sight height/setback manually if appropriate for the centered model.`
     : custom ? "Manual sight geometry overrides; restore to reapply optic defaults."
       : `Stock direct-mount defaults: height ${fmt(geometry.sightHeight * 100, 3)} cm; setback ${fmt(geometry.sightSetback * 100, 3)} cm from the bare muzzle.`}
-    ${rail}${zero} ${optic.zeroModel === "unadjusted" ? "This PIP optic has no base zero adjustment." : ""} Optical origin: ${optic.originRule ?? "unavailable"}. Source: ${optic.source.bundle}/${optic.source.assetName}. Forward-facing stock poses are not live animation measurements.`;
+    ${rail}${zero} ${optic.zeroModel === "unadjusted" ? "This PIP optic has no base zero adjustment." : ""} Optical origin: ${optic.originRule ?? "unavailable"}. ${modNote(optic, modsById)} Source: ${optic.source.bundle}/${optic.source.assetName}. Forward-facing stock poses are not live animation measurements.`;
 }
 
 function showOpticMountControls() {
@@ -625,19 +628,19 @@ function previewMuzzleDevice() {
     }
   }
   $("muzzle-device-facts").textContent =
-    `${deviceKindLabel(device)} · ${accuracy?.name ?? "Unknown accuracy class"}. ${bias} Add to loadout to apply. Source: ${device.source?.bundle ?? "unknown"}/${device.source?.assetName ?? device.id}.`;
+    `${deviceKindLabel(device)} · ${accuracy?.name ?? "Unknown accuracy class"}. ${bias} Add to loadout to apply. ${modNote(device, modsById)} Source: ${device.source?.bundle ?? "unknown"}/${device.source?.assetName ?? device.id}.`;
 }
 
 function filterMuzzleDevices(savedId) {
   const previous = typeof savedId === "string" ? savedId : $("muzzle-device").value;
   const matches = searchMuzzleDevices(data.muzzleDevices ?? [], data.settings,
-    $("muzzle-search").value, $("muzzle-kind").value);
+    $("muzzle-search").value, $("muzzle-kind").value, modText);
   const selected = typeof savedId === "string" && muzzleDeviceById.get(savedId);
   const pinned = selected
     && !matches.some((device) => device.id === savedId);
   $("muzzle-device").replaceChildren(
-    ...(pinned ? [option(savedId, `Selected: ${selected.name}`)] : []),
-    ...matches.map((device) => option(device.id, device.name)),
+    ...(pinned ? [option(savedId, `Selected: ${selected.name}${modSuffix(selected, modsById)}`)] : []),
+    ...matches.map((device) => option(device.id, `${device.name}${modSuffix(device, modsById)}`)),
   );
   if (pinned || matches.some((device) => device.id === previous)) $("muzzle-device").value = previous;
   if (!matches.length && !pinned) $("muzzle-device").append(option("", "No matching muzzle devices"));
@@ -720,10 +723,10 @@ function refreshMuzzleSetup(resetGeometry = false) {
 
 function filterWeapons() {
   const previous = $("weapon").value;
-  const matches = searchWeapons(data.weapons, caliberById, $("weapon-search").value);
+  const matches = searchWeapons(data.weapons, caliberById, $("weapon-search").value, modText);
   const selected = weaponById.get(previous);
   const pinned = selected && !matches.some((item) => item.id === previous);
-  const label = (item) => `${item.name} · ${caliberById.get(item.caliberId).name}`;
+  const label = (item) => `${item.name}${modSuffix(item, modsById)} · ${caliberById.get(item.caliberId).name}`;
   $("weapon").replaceChildren(
     option("", "All weapons / manual setup"),
     ...(pinned ? [option(selected.id, `Selected: ${label(selected)}`)] : []),
@@ -748,9 +751,9 @@ function showWeaponNote() {
     const expected = key === "barrelLength" && muzzleDevices.length ? selectedMuzzleGeometry().barrelLength : preset[key];
     return expected === null ? $(id).value !== "" : $(id).valueAsNumber !== expected;
   });
-  const source = weapon.source
+  const source = `${modNote(weapon, modsById)} ${weapon.source
     ? `Source: ${weapon.source.bundle}/${weapon.source.assetName}.`
-    : "No stock firearm configuration available.";
+    : "No stock firearm configuration available."}`.trim();
   $("weapon-note").textContent =
     `${custom ? "Custom overrides; restore to reapply loadout-aware weapon values." : "Stock prefab values; editable in Manual overrides."} ${preset.warnings.join(" ")} ${source} Sight geometry uses the selected optic/direct mount or manual inputs.${manualMuzzleGeometry() ? " Measured muzzle geometry is preserved when restoring multipliers." : ""}`;
 }
@@ -795,7 +798,7 @@ function showRoundFacts() {
   if (!round) return;
   const caliber = caliberById.get(round.caliberId);
   $("ammo-note").textContent =
-    `${caliber.name} · ${round.roundClass} · ${round.numProjectiles} projectile${round.numProjectiles === 1 ? "" : "s"}. ${round.hasSubmunitions ? "Primary flight only; submunition paths are not modeled." : ""} ${round.numProjectiles > 1 ? "One centerline pellet; spread is not modeled." : ""}`;
+    `${caliber.name} · ${round.roundClass} · ${round.numProjectiles} projectile${round.numProjectiles === 1 ? "" : "s"}. ${round.hasSubmunitions ? "Primary flight only; submunition paths are not modeled." : ""} ${round.numProjectiles > 1 ? "One centerline pellet; spread is not modeled." : ""} ${modNote(round, modsById)}`;
   const facts = [
     ["Projectile mass", `${fmt(round.mass * 1000, 3)} g`],
     ["Diameter", `${fmt(round.diameter * 1000, 2)} mm`],
@@ -835,7 +838,7 @@ function filterRounds(preserveSelected = false) {
   const matches = data.rounds.filter(
     (round) =>
       (!preset || round.caliberId === preset.caliberId) &&
-      `${round.name} ${caliberById.get(round.caliberId).name} ${round.id}`
+      `${round.name} ${caliberById.get(round.caliberId).name} ${round.id} ${modText(round)}`
         .toLowerCase()
         .includes(query),
   );
@@ -843,8 +846,8 @@ function filterRounds(preserveSelected = false) {
   const pinned = preserveSelected === true && selected && (!preset || selected.caliberId === preset.caliberId)
     && !matches.some((round) => round.id === previous);
   $("ammunition").replaceChildren(
-    ...(pinned ? [option(selected.id, `Selected: ${selected.name}`)] : []),
-    ...matches.map((round) => option(round.id, round.name)),
+    ...(pinned ? [option(selected.id, `Selected: ${selected.name}${modSuffix(selected, modsById)}`)] : []),
+    ...matches.map((round) => option(round.id, `${round.name}${modSuffix(round, modsById)}`)),
   );
   submit.disabled = matches.length === 0 && !pinned;
   if (!matches.length && !pinned) {
@@ -1189,6 +1192,7 @@ async function start() {
   weaponById = new Map(data.weapons.map((item) => [item.id, item]));
   muzzleDeviceById = new Map((data.muzzleDevices ?? []).map((item) => [item.id, item]));
   opticById = new Map((data.optics ?? []).map((item) => [item.id, item]));
+  modsById = modById(data.mods ?? []);
   filterOptics();
   filterWeapons();
   changeWeapon();
@@ -1216,13 +1220,23 @@ async function start() {
   $("model-details").textContent =
     "Gravity before drag; global Mach-dependent drag curve; area from projectile diameter; displacement scaled by the flight multiplier. Single-precision state updates and unweighted Hermite curve interpolation. Range-card time/speed and POI offsets refer to the base optic setting; elevation and windage are the separately solved two-axis low-angle aim corrections. The chart separately simulates the corrected launch for the selected range. Ordered muzzle devices apply game-derived fixed launch bias, not a lateral free-flight force. Stock mount geometry changes the spawn point, velocity-curve distance and effective sight geometry. Speed is the internal velocity state before displacement scaling. Optic distance remains independent of the selected ammunition class.";
   $("provenance").textContent =
-    `Unity ${data.source.unityVersion}. Assembly SHA-256: ${data.source.assemblySha256}. ${data.calibers.length} caliber curves; ${data.scenes.length} scene presets; numeric parameters extracted locally from ${data.source.inputs.length} source files.`;
+    `Unity ${data.source.unityVersion}. Assembly SHA-256: ${data.source.assemblySha256}. ${data.calibers.length} caliber curves; ${data.scenes.length} scene presets; numeric parameters extracted locally from ${data.source.inputs.length} source files. ${modSummary(data)}`.trim();
   $("excluded-summary").textContent =
     `${data.excluded.length} unavailable projectile variants — integrators not modeled`;
   for (const item of data.excluded) {
     const li = document.createElement("li");
-    li.textContent = `${item.name}: ${item.reason}`;
+    li.textContent = `${item.name}${modSuffix(item, modsById)}: ${item.reason}`;
     $("excluded-rounds").append(li);
+  }
+  const issues = data.modIssues ?? [];
+  $("mod-issues-section").hidden = !data.mods;
+  $("mod-issues-summary").textContent =
+    `${issues.length} mod item${issues.length === 1 ? "" : "s"} left out or limited — reasons`;
+  for (const item of issues) {
+    const li = document.createElement("li");
+    const mod = modsById.get(item.mod);
+    li.textContent = `${mod?.name ?? item.mod}${item.name ? ` · ${item.name}` : ""}${item.id && item.id !== item.name ? ` (${item.id})` : ""}: ${item.reason}`;
+    $("mod-issues").append(li);
   }
   $("workspace").hidden = false;
   if (document.defaultView.matchMedia?.("(max-width: 900px)").matches) {

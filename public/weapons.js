@@ -1,5 +1,5 @@
 // Stock weapon presets use serialized geometry and verified FVRFireArm.Fire callers.
-export function searchWeapons(weapons, caliberById, query) {
+export function searchWeapons(weapons, caliberById, query, extraText = () => "") {
   const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
   return weapons.filter((weapon) => {
     const caliberIds = new Set([
@@ -7,7 +7,7 @@ export function searchWeapons(weapons, caliberById, query) {
       ...(weapon.chambers ?? []).map((chamber) => chamber.caliberId),
     ]);
     const names = [...caliberIds].map((id) => caliberById.get(id)?.name ?? "");
-    const text = `${weapon.name} ${weapon.id} ${names.join(" ")}`.toLowerCase();
+    const text = `${weapon.name} ${weapon.id} ${names.join(" ")} ${extraText(weapon)}`.toLowerCase();
     return terms.every((term) => text.includes(term));
   });
 }

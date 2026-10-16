@@ -2,11 +2,11 @@
 export const deviceKindLabel = (device) =>
   device.kind === "suppressor" ? "Suppressor" : device.kind === "brake" ? "Brake / compensator" : "Other muzzle device";
 
-export function searchMuzzleDevices(devices, settings, query, kind = "") {
+export function searchMuzzleDevices(devices, settings, query, kind = "", extraText = () => "") {
   const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
   return devices.filter((device) => {
     const accuracy = settings.accuracyClasses?.find((item) => item.id === device.accuracyClass);
-    const text = `${device.name} ${device.id} ${deviceKindLabel(device)} ${device.componentClass} ${accuracy?.name ?? ""}`.toLowerCase();
+    const text = `${device.name} ${device.id} ${deviceKindLabel(device)} ${device.componentClass} ${accuracy?.name ?? ""} ${extraText(device)}`.toLowerCase();
     return (!kind || device.kind === kind) && terms.every((term) => text.includes(term));
   });
 }

@@ -1,8 +1,8 @@
 // Forward-facing, direct stock mounting; midpoint is the editable rail default.
-export function searchOptics(optics, query) {
+export function searchOptics(optics, query, extraText = () => "") {
   const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
   return optics.filter((optic) => {
-    const text = `${optic.name} ${optic.attachmentId} ${optic.kind} ${optic.componentClass} ${optic.mountTypeName}`.toLowerCase();
+    const text = `${optic.name} ${optic.attachmentId} ${optic.kind} ${optic.componentClass} ${optic.mountTypeName} ${extraText(optic)}`.toLowerCase();
     return terms.every((term) => text.includes(term));
   });
 }

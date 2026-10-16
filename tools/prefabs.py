@@ -33,9 +33,10 @@ _ZERO_SCALING_DEGREES = {0: 1.0, 1: 0.01666666753590107, 2: 0.05624999850988388,
 
 
 class Prefabs:
-    def __init__(self, assets, pe, types, families, shot_cache):
+    def __init__(self, assets, pe, types, families, shot_cache, scripts=None):
         self.assets, self.pe, self.types, self.families = assets, pe, types, families
         self.shot_cache = shot_cache
+        self.scripts = scripts
         self.matrices = {}
         fire = next(entry.row for entry in types["FVRFireArm"].MethodList if str(entry.row.Name) == "Fire")
         self.fire_token = next(0x06000000 | i for i, method in enumerate(pe.net.mdtables.MethodDef, 1) if method is fire)
@@ -235,28 +236,50 @@ class Prefabs:
             result.append(optic)
         return result
 
+    @staticmethod
+    def fire_calls(pe, methods, tokens):
+        calls = []
+        for method in methods:
+            if not method.Rva:
+                continue
+            offset = pe.get_offset_from_rva(method.Rva)
+            instructions = CilMethodBody(CilMethodBodyReaderBytes(memoryview(pe.__data__)[offset:])).instructions
+            for i, ins in enumerate(instructions):
+                if ins.opcode.name not in ("call", "callvirt") or getattr(ins.operand, "value", None) not in tokens:
+                    continue
+                literal = instructions[i-2].operand if i >= 2 and instructions[i-2].opcode.name == "ldc.r4" and instructions[i-1].opcode.name == "ldc.r4" else None
+                calls.append({"method": str(method.Name), "value": literal, "rva": method.Rva})
+        return calls
+
     def shot_rule(self, name, fields):
+        # Mod classes (qualified "Assembly:Namespace.Class" keys) are read from
+        # their own assembly. A mod method sharing a name with the game method
+        # that fires may replace that path, so it is never assumed unchanged.
+        redefined = {}
         for classname in self.families.get(name, []):
             if classname == "FVRFireArm":
                 break
+            modded = ":" in classname
+            if modded and (self.scripts is None or classname not in self.scripts.types):
+                return {"kind": "manual", "reason": f"Script class {classname} is not in a readable installed assembly; inspect its firing path."}
             if classname not in self.shot_cache:
-                calls = []
-                for entry in self.types[classname].MethodList:
-                    method = entry.row
-                    if not method.Rva:
-                        continue
-                    offset = self.pe.get_offset_from_rva(method.Rva)
-                    instructions = CilMethodBody(CilMethodBodyReaderBytes(memoryview(self.pe.__data__)[offset:])).instructions
-                    for i, ins in enumerate(instructions):
-                        if ins.opcode.name not in ("call", "callvirt") or getattr(ins.operand, "value", None) != self.fire_token:
-                            continue
-                        literal = instructions[i-2].operand if i >= 2 and instructions[i-2].opcode.name == "ldc.r4" and instructions[i-1].opcode.name == "ldc.r4" else None
-                        calls.append({"method": str(method.Name), "value": literal, "rva": method.Rva})
-                self.shot_cache[classname] = calls
+                if modded:
+                    tokens = self.scripts.member_tokens(classname, "FistVR", "FVRFireArm", "Fire")
+                    self.shot_cache[classname] = self.fire_calls(self.scripts.types[classname]["pe"], self.scripts.methods(classname), tokens)
+                else:
+                    self.shot_cache[classname] = self.fire_calls(self.pe, [entry.row for entry in self.types[classname].MethodList], {self.fire_token})
             calls = self.shot_cache[classname]
+            if modded:
+                for method in self.scripts.methods(classname):
+                    if not self.scripts.calls_game_base(classname, method):
+                        redefined.setdefault(str(method.Name), classname)
             if not calls:
                 continue
             source = {"class": classname, "methods": sorted(set(call["method"] for call in calls))}
+            replaced = sorted(method for method in source["methods"] if redefined.get(method, classname) != classname)
+            if replaced:
+                owner = redefined[replaced[0]]
+                return {"kind": "manual", "reason": f"Mod class {owner} redefines {', '.join(replaced)}, which fires this weapon; inspect its firing path.", "source": source}
             values = {call["value"] for call in calls}
             if len(values) == 1 and None not in values:
                 return {"kind": "constant", "value": values.pop(), "source": source}

@@ -89,6 +89,18 @@ The default output remains `public/data/h3vr.json`. The extractor also accepts `
 
 Extraction records numeric parameters, identifiers, curves, and source provenance. It does not copy textures, meshes, or game code into the website. Both `game_data/` and `public/data/` are ignored by Git.
 
+### Including installed mods
+
+Add `--mods` with your mod-manager profile (r2modman / Thunderstore Mod Manager), a game folder containing `BepInEx`, or the `BepInEx/plugins` folder itself. Repeat it for several folders:
+
+```sh
+npm run extract -- --mods "/path/to/r2modmanPlus-local/H3VR/profiles/Default"
+```
+
+Nothing is tied to particular mods. Every Unity bundle and .NET assembly under the folder is found by its file contents, grouped into packages by Thunderstore `manifest.json`, and read with OtherLoader's registration rules. Modded weapons, rounds, calibers, muzzle devices, optics and accuracy classes join the dataset tagged with their mod; the app labels them, finds them with the search term `mod`, and lists every modded item it had to leave out with the reason. Content that two mods define differently is left out rather than guessed, because the game keeps whichever loads first. Mods that patch ballistic game code are named in the app's methodology section; their runtime changes are not modeled. See [installed mods](docs/mods.md) for the rules and limits.
+
+Re-extract after installing, updating or removing mods. A dataset built with mods describes your own installation, so think before deploying it publicly.
+
 ## Using the calculator
 
 The left menu has independently expandable sections:
