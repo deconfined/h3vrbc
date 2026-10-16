@@ -1,6 +1,6 @@
 # Installed mods
 
-`npm run extract -- --mods DIR` adds the content of an installed mod set to the dataset. `DIR` is a mod-manager profile, a game folder containing `BepInEx`, or `BepInEx/plugins`; `--mods` may be repeated. A `LegacyVirtualObjects` folder beside `h3vr_Data` is included automatically when present. The base game is extracted exactly as without `--mods`, and mod failures never abort extraction: each is recorded with its reason.
+`npm run extract -- --mods DIR` adds the content of an installed mod set to the dataset. `DIR` is a mod-manager profile, a game folder containing `BepInEx`, or `BepInEx/plugins`; `--mods` may be repeated. `LegacyVirtualObjects` folders are read too: the one beside `h3vr_Data`, one in a game folder given with `--mods`, or one passed directly. The base game is extracted exactly as without `--mods`, and mod failures never abort extraction: each unreadable file, malformed value (including NaN or infinity) and left-out item is recorded with its reason and listed in the app. Failure messages never include local folder paths.
 
 ## Discovery
 

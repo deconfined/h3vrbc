@@ -121,13 +121,26 @@ class Prefabs:
                             "scaleModifier": fields["ScaleModifier"], "source": self.source(mount)})
         return result
 
-    def descendants(self, root):
-        pending = [self.transform(root)]
+    def transforms(self, root):
+        """ROOT's transform and every one below it, depth first, with fields.
+
+        A transform reached twice means a cyclic hierarchy, which only
+        corrupt (third-party) data can contain; walking it would never end.
+        """
+        pending, visited = [self.transform(root)], set()
         while pending:
             transform = pending.pop()
+            key = (transform.assets_file.name, transform.path_id)
+            if key in visited:
+                raise ValueError("Cyclic transform hierarchy in prefab")
+            visited.add(key)
             fields = transform.read_typetree()
-            yield from self.components(self.resolve(transform, fields["m_GameObject"]))
+            yield transform, fields
             pending.extend(self.resolve(transform, pointer) for pointer in fields["m_Children"])
+
+    def descendants(self, root):
+        for transform, fields in self.transforms(root):
+            yield from self.components(self.resolve(transform, fields["m_GameObject"]))
 
     def relative_pose(self, root, pose):
         matrix = self.matrix(self.transform(root))
@@ -317,17 +330,13 @@ class Prefabs:
                 candidates.append((chamber, muzzle))
         if not candidates:
             root = self.resolve(obj, data["m_GameObject"])
-            pending = [self.transform(root)]
-            while pending:
-                transform = pending.pop()
-                fields = transform.read_typetree()
+            for transform, fields in self.transforms(root):
                 go = self.resolve(transform, fields["m_GameObject"])
                 for component in self.components(go):
                     if self.assets.classname(component) == "FVRFireArmChamber":
                         chamber_data = self.assets.full(component)
                         if chamber_data["RoundType"] == data["RoundType"]:
                             candidates.append((component, muzzle))
-                pending.extend(self.resolve(transform, pointer) for pointer in fields["m_Children"])
         seen = set()
         for pointer, actual_muzzle in candidates:
             chamber = self.resolve(obj, pointer) if isinstance(pointer, dict) else pointer

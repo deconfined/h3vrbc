@@ -4,7 +4,10 @@ import argparse
 import gc
 import hashlib
 import json
+import math
+import os
 import re
+import sys
 from pathlib import Path
 
 import dnfile
@@ -131,10 +134,33 @@ def bundle_objects(file):
             yield from bundle_objects(item)
 
 
+# Local folders whose paths must not be published in failure messages.
+PRIVATE_PATHS = []
+
+
 def failure(error):
     if isinstance(error, KeyError):
         return f"Serialized data lacks field {error.args[0]!r}; the mod may target another game version."
-    return f"{type(error).__name__}: {error}"
+    if isinstance(error, OSError) and error.strerror:
+        return f"{type(error).__name__}: {error.strerror}"
+    text = str(error)
+    bases = {str(path) for path in PRIVATE_PATHS} | {os.getcwd(), str(Path.home())}
+    for base in sorted((base for base in bases if len(base.strip("/\\")) > 1), key=len, reverse=True):
+        text = text.replace(base, "<local>")
+    return f"{type(error).__name__}: {text}"
+
+
+def require_finite(value, where="value"):
+    """Raise for NaN or infinity anywhere in VALUE: JSON cannot carry them."""
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError(f"Non-finite {where}")
+    if isinstance(value, dict):
+        for key, item in value.items():
+            require_finite(item, key)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            require_finite(item, where)
+    return value
 
 
 def deref(obj, pointer):
@@ -157,7 +183,13 @@ def curve(data):
     keys = data["m_Curve"]
     if not keys:
         raise ValueError("Required ballistic curve is empty")
-    return {"keys": [{key: item[key] for key in ("time", "value", "inSlope", "outSlope")} for item in keys], "preWrap": "clamp", "postWrap": "clamp"}
+    if not all(math.isfinite(item["time"]) and math.isfinite(item["value"]) for item in keys):
+        raise ValueError("Ballistic curve has a non-finite key")
+    # Unity stores a Constant (stepped) tangent as an infinite slope; JSON
+    # null keeps that meaning, as the curve evaluator steps on non-finite slopes.
+    return {"keys": [{"time": item["time"], "value": item["value"],
+                      **{key: item[key] if math.isfinite(item[key]) else None for key in ("inSlope", "outSlope")}}
+                     for item in keys], "preWrap": "clamp", "postWrap": "clamp"}
 
 
 def enum_values(pe, name):
@@ -280,6 +312,8 @@ def extract(root, output, mod_dirs=()):
                               "attachmentId": wrapper["ItemID"], "name": wrapper["DisplayName"], **tag})
                 optic["source"].update(source)
                 views.append(optic)
+        if mod is not None:
+            require_finite([profiles, devices, views])
         # Commit only once the whole prefab has been read.
         for profile in profiles:
             weapons[wrapper["ItemID"]].pop("presetUnavailable", None)
@@ -311,7 +345,7 @@ def extract(root, output, mod_dirs=()):
             excluded.append({"id": item_id, "name": wrapper["DisplayName"], "reason": reason, **tag})
             return
         p = assets.full(projectile)
-        rounds.append({
+        entry = {
             "id": item_id, "name": wrapper["DisplayName"], "caliberId": data["RoundType"],
             "roundClass": class_names.get(data["RoundClass"], f"Class {data['RoundClass']}"), "numProjectiles": data["NumProjectiles"],
             "spreadDegrees": data["ProjectileSpread"], "mass": p["Mass"], "diameter": p["Dimensions"]["x"],
@@ -322,7 +356,8 @@ def extract(root, output, mod_dirs=()):
             "cleanupDelay": p["m_dieTimerMax"],
             "source": {**source, "file": obj.assets_file.name, "roundPathId": str(obj.path_id), "projectilePathId": str(projectile.path_id)},
             **tag,
-        })
+        }
+        rounds.append(require_finite(entry) if mod is not None else entry)
 
     def read_bundle(objects, lookup, source, mod=None, scripts=None):
         """Read one bundle's catalogued prefabs and exported round prefabs.
@@ -393,14 +428,24 @@ def extract(root, output, mod_dirs=()):
         class that exists is skipped. Which of two mods loads first is a race,
         so content two mods provide differently is reported, not guessed.
         """
-        packages = []
-        for directory in directories:
+        # OtherLoader also reads <game>/LegacyVirtualObjects: beside h3vr_Data,
+        # or in a game folder given with --mods, or named directly.
+        packages, legacy = [], [game.parent / mods.LEGACY_FOLDER]
+        for directory in map(Path, directories):
+            if directory.name == mods.LEGACY_FOLDER:
+                legacy.append(directory)
+                continue
             plugins, found = mods.discover(directory)
             packages.extend((plugins, package) for package in found)
-        legacy = game.parent / "LegacyVirtualObjects"
-        if legacy.is_dir() and not any(plugins == legacy for plugins, _ in packages):
-            plugins, found = mods.discover(legacy, legacy=True)
-            packages.extend((plugins, package) for package in found)
+            legacy.append(directory / mods.LEGACY_FOLDER)
+        read = set()
+        for folder in legacy:
+            if folder.is_dir() and folder.resolve() not in read:
+                read.add(folder.resolve())
+                plugins, found = mods.discover(folder, legacy=True)
+                packages.extend((plugins, package) for package in found)
+        PRIVATE_PATHS.extend([game.parent, *(Path(directory).resolve() for directory in directories)])
+        PRIVATE_PATHS.extend(plugins for plugins, _ in packages)
         counts = {}
         for _, package in packages:
             counts[package.id] = counts.get(package.id, 0) + 1
@@ -440,11 +485,12 @@ def extract(root, output, mod_dirs=()):
                     continue
                 try:
                     scripts.add(module, path)
-                    owners[name] = package
                     classes, dynamic = scripts.game_hooks(name)
                 except Exception as error:  # Malformed third-party metadata.
+                    scripts.discard(name)
                     package.skipped.append((path, f"Unreadable assembly metadata: {failure(error)}"))
                     continue
+                owners[name] = package
                 record = hooks.setdefault(package.id, {"classes": set(), "dynamic": False})
                 record["classes"].update(classes)
                 record["dynamic"] = record["dynamic"] or dynamic
@@ -496,9 +542,13 @@ def extract(root, output, mod_dirs=()):
                         if name == "FVRObject":
                             data = assets.full(obj)
                             if isinstance(data.get("ItemID"), str) and data["ItemID"]:
+                                if not isinstance(data.get("DisplayName"), str):
+                                    data["DisplayName"] = data["ItemID"]
                                 offered.setdefault(data["ItemID"], []).append((package, path, data))
                         elif name == "FVRFireArmRoundDisplayData":
                             data = assets.full(obj)
+                            if not isinstance(data["Type"], int) or not isinstance(data["DisplayName"], str):
+                                raise ValueError("Round display data without an integer Type and a name")
                             members = []
                             for entry in data.get("Classes", []):
                                 # The loader registers the caliber without
@@ -512,7 +562,9 @@ def extract(root, output, mod_dirs=()):
                                     continue
                             displays.append((package, {"file": obj.assets_file.name, "pathId": str(obj.path_id)}, data, members))
                         elif name == "FVRFireArmMechanicalAccuracyChart":
-                            charts.append((package, assets.full(obj)["Entries"]))
+                            entries = [require_finite({key: entry[key] for key in ("Class", *mods.ACCURACY_FIELDS)})
+                                       for entry in assets.full(obj)["Entries"]]
+                            charts.append((package, entries))
                     except Exception as error:  # Third-party data.
                         issue(package, None, f"{path.name} object {obj.path_id}", failure(error))
             assets.embedded = False
@@ -577,7 +629,7 @@ def extract(root, output, mod_dirs=()):
         for item_id, offers in accepted.items():
             package, _, data = offers[0]
             if data.get("Category") == 1:
-                weapons[item_id] = {"id": item_id, "name": data["DisplayName"], "caliberId": data.get("RoundType"), "chambers": [],
+                weapons[item_id] = {"id": item_id, "name": data.get("DisplayName", item_id), "caliberId": data.get("RoundType"), "chambers": [],
                                     "presetUnavailable": "No standard firearm prefab configuration found.", "mod": package.id}
 
         # Pass 2: read each package's prefabs, from the bundle Anvil loads them
@@ -621,6 +673,11 @@ def extract(root, output, mod_dirs=()):
                 except OSError as error:
                     digests[path] = None
                     package.skipped.append((path, f"Unreadable file: {failure(error)}"))
+            package.skipped = list(dict.fromkeys(package.skipped))
+            for path, reason in package.skipped:
+                # Duplicate or game-owned assemblies lose nothing; anything else may.
+                if not reason.startswith(("Copy of game assembly", "Generated MonoMod hook", "Assembly ")):
+                    issue(package, None, mods._relative(path, plugins), f"File not read: {reason}")
             record = package.describe(plugins, digests)
             hooked = hooks.get(package.id)
             if hooked and (hooked["classes"] or hooked["dynamic"]):
@@ -676,7 +733,7 @@ def extract(root, output, mod_dirs=()):
     caliber_ids = {item["id"] for item in calibers}
     valid = []
     for item in rounds:
-        if item["caliberId"] not in caliber_ids or item["mass"] <= 0 or item["diameter"] <= 0 or item["muzzleVelocity"] <= 0:
+        if item["caliberId"] not in caliber_ids or not (item["mass"] > 0 and item["diameter"] > 0 and item["muzzleVelocity"] > 0):
             if "mod" not in item:
                 raise ValueError(f"Missing or invalid physical data: {item['id']}")
             reason = (unknown_caliber(item["caliberId"]) if item["caliberId"] not in caliber_ids
@@ -729,6 +786,8 @@ def extract(root, output, mod_dirs=()):
 
 
 if __name__ == "__main__":
+    # Mod folder names need not be valid UTF-8; progress output must not fail on them.
+    sys.stdout.reconfigure(errors="backslashreplace")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("game_install", type=Path, help="Game installation or h3vr_Data directory")
     parser.add_argument("--output", type=Path, default=Path("public/data/h3vr.json"))

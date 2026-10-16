@@ -1222,7 +1222,7 @@ async function start() {
   $("provenance").textContent =
     `Unity ${data.source.unityVersion}. Assembly SHA-256: ${data.source.assemblySha256}. ${data.calibers.length} caliber curves; ${data.scenes.length} scene presets; numeric parameters extracted locally from ${data.source.inputs.length} source files. ${modSummary(data)}`.trim();
   $("excluded-summary").textContent =
-    `${data.excluded.length} unavailable projectile variants — integrators not modeled`;
+    `${data.excluded.length} unavailable projectile variant${data.excluded.length === 1 ? "" : "s"} — reasons`;
   for (const item of data.excluded) {
     const li = document.createElement("li");
     li.textContent = `${item.name}${modSuffix(item, modsById)}: ${item.reason}`;

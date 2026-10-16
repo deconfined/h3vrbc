@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -22,6 +23,7 @@ ZIP_MAGIC = b"PK\x03\x04"
 # A .NET assembly is a PE image; the CLR header is checked when it is parsed.
 PE_MAGIC = b"MZ"
 LEGACY_FOLDER = "LegacyVirtualObjects"
+MANIFEST_LIMIT = 1 << 20  # Thunderstore manifests are a few hundred bytes.
 # r2modman/Thunderstore install folders are named Author-Package.
 _THUNDERSTORE_FOLDER = re.compile(r"^(?P<author>[^-]+)-(?P<name>.+)$")
 
@@ -40,12 +42,12 @@ class ModPackage:
     skipped: list = field(default_factory=list)
 
     def describe(self, root, digests):
-        files = [{"file": _relative(path, root), "kind": kind, "sha256": digests[path]}
+        files = [{"file": _relative(path, root), "kind": kind, "sha256": digests.get(path)}
                  for kind, paths in (("bundle", self.bundles), ("assembly", self.dlls)) for path in paths]
         result = {"id": self.id, "name": self.name, "version": self.version, "author": self.author,
                   "website": self.website, "dependencies": self.dependencies, "files": files}
         if self.skipped:
-            result["skipped"] = [{"file": _relative(path, root), "reason": reason} for path, reason in self.skipped]
+            result["skipped"] = [{"file": _relative(path, root), "reason": reason} for path, reason in dict.fromkeys(self.skipped)]
         return result
 
 
@@ -89,10 +91,31 @@ def classify(path):
     return None
 
 
-def read_manifest(path):
+def _manifest(folder):
+    """FOLDER's manifest.json when it is a regular file, not a link."""
+    path = folder / "manifest.json"
     try:
-        data = json.loads(path.read_text(encoding="utf-8-sig"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return path if not path.is_symlink() and path.is_file() else None
+    except OSError:
+        return None
+
+
+def read_manifest(path):
+    """A manifest's fields, or {} for anything that is not a small JSON object.
+
+    Links and special files are refused, so a manifest cannot pull content
+    from outside the folder or block on a pipe.
+    """
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+        with os.fdopen(descriptor, "rb") as file:
+            if not stat.S_ISREG(os.fstat(file.fileno()).st_mode):
+                return {}
+            text = file.read(MANIFEST_LIMIT + 1)
+        if len(text) > MANIFEST_LIMIT:
+            return {}
+        data = json.loads(text.decode("utf-8-sig"))
+    except (OSError, ValueError, RecursionError):
         return {}
     return data if isinstance(data, dict) else {}
 
@@ -103,7 +126,8 @@ def _string(value):
 
 def _package(root, folder, files):
     relative = _relative(folder, root) if folder != root else folder.name
-    manifest = read_manifest(folder / "manifest.json") if folder.is_dir() else {}
+    found = _manifest(folder) if folder.is_dir() else None
+    manifest = read_manifest(found) if found else {}
     match = _THUNDERSTORE_FOLDER.match(folder.name)
     name = _string(manifest.get("name")) or (match["name"] if match else None) or folder.stem
     author = _string(manifest.get("author")) or (match["author"] if match else None)
@@ -124,25 +148,45 @@ def _package(root, folder, files):
 
 
 def _files(root, legacy=False):
-    """Regular files under ROOT, grouped by the package folder that owns them."""
-    groups = {}
-    for directory, folders, names in os.walk(root, followlinks=False):
+    """Regular files under ROOT, grouped by the package folder that owns them.
+
+    Returns (groups, problems): problems maps a package folder to the
+    [(path, reason)] of files or folders that could not be read.
+    """
+    groups, problems = {}, {}
+
+    def owner_of(path, folder=False):
+        here = path if folder else path.parent
+        owner = next((parent for parent in [here, *here.parents]
+                      if parent != root and root in parent.parents and _manifest(parent)), None)
+        if owner is None:
+            # Loose files in the root form one package, so a data bundle and
+            # its late_ partner in one directory are always read together.
+            owner = root if not folder and path.parent == root else root / path.relative_to(root).parts[0]
+        return owner
+
+    def unreadable(error):
+        path = Path(error.filename) if error.filename else root
+        if path != root and root in path.parents:
+            problems.setdefault(owner_of(path, folder=True), []).append((path, f"Folder could not be read: {error.strerror}."))
+
+    for directory, folders, names in os.walk(root, onerror=unreadable, followlinks=False):
         folders.sort()
         here = Path(directory)
         in_legacy = legacy or LEGACY_FOLDER in here.relative_to(root).parts
         for name in sorted(names):
             file = here / name
-            # Mod managers disable a mod by renaming its files to *.old.
-            if file.is_symlink() or not file.is_file() or (in_legacy and file.suffix) or name.casefold().endswith(".old"):
+            try:
+                # Mod managers disable a mod by renaming its files to *.old.
+                if file.is_symlink() or not file.is_file() or (in_legacy and file.suffix) or name.casefold().endswith(".old"):
+                    continue
+                owner = owner_of(file)
+            except OSError as error:
+                problems.setdefault(root / file.relative_to(root).parts[0] if here != root else root, []).append(
+                    (file, f"File could not be read: {error.strerror}."))
                 continue
-            owner = next((parent for parent in [here, *here.parents]
-                          if parent != root and root in parent.parents and (parent / "manifest.json").is_file()), None)
-            if owner is None:
-                # Loose files in the root form one package, so a data bundle and
-                # its late_ partner in one directory are always read together.
-                owner = root / file.relative_to(root).parts[0] if here != root else root
             groups.setdefault(owner, []).append(file)
-    return groups
+    return groups, problems
 
 
 def discover(path, legacy=False):
@@ -159,11 +203,14 @@ def discover(path, legacy=False):
     folders; LEGACY marks PATH itself as such a folder.
     """
     root = Path(path) if legacy else plugins_root(path)
-    packages = {folder: _package(root, folder, files) for folder, files in sorted(_files(root, legacy).items())}
+    groups, problems = _files(root, legacy)
+    packages = {folder: _package(root, folder, files) for folder, files in sorted(groups.items())}
+    for folder, entries in problems.items():
+        packages.setdefault(folder, _package(root, folder, [])).skipped.extend(entries)
     monomod = root.parent / "monomod"
     if not legacy and root.name.casefold() == "plugins" and root.parent.name.casefold() == "bepinex" and monomod.is_dir():
         by_name = {folder.name: package for folder, package in packages.items()}
-        for folder, files in sorted(_files(monomod).items()):
+        for folder, files in sorted(_files(monomod)[0].items()):
             patches = [file for file in files if file.name.casefold().endswith(".mm.dll") and classify(file) == "assembly"]
             if not patches:
                 continue
@@ -238,6 +285,14 @@ class ScriptAssemblies:
             self.types.setdefault(key, {"assembly": name, "pe": pe, "row": row})
         self._families.clear()
         return name
+
+    def discard(self, name):
+        """Forget assembly NAME, e.g. when its metadata turned out unreadable."""
+        entry = self.assemblies.pop(name, None)
+        if entry is not None:
+            for key in [key for key, item in self.types.items() if item["pe"] is entry["pe"]]:
+                del self.types[key]
+            self._families.clear()
 
     def injected(self):
         """Classes MonoMod script libraries add to the game assembly.

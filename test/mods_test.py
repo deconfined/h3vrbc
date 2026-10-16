@@ -4,13 +4,14 @@ import os
 import struct
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 from types import SimpleNamespace
 
 from UnityPy.files import SerializedFile
 
-from tools import mods
-from tools.extract import Assets, bundle_objects, failure
+from tools import extract, mods
+from tools.extract import Assets, bundle_objects, curve, failure, require_finite
 from tools.prefabs import Prefabs
 
 BUNDLE = b"UnityFS\0\0\0\0\x06" + bytes(32)
@@ -180,6 +181,49 @@ class DiscoveryTests(unittest.TestCase):
         record = by_id["../monomod/Solo-Lib"].describe(root, {path: None for path in by_id["../monomod/Solo-Lib"].dlls})
         self.assertEqual(record["files"][0]["file"], "../monomod/Solo-Lib/Assembly-CSharp.Solo.mm.dll")
         self.assertEqual(mods._relative(Path("/elsewhere/secret.dll"), root), "secret.dll")
+
+    def test_manifests_that_are_not_small_json_objects_are_ignored(self):
+        plugins = self.root / "plugins"
+        write(plugins / "Deep-Mod" / "manifest.json", b"[" * 100000 + b"]" * 100000)
+        write(plugins / "Big-Mod" / "manifest.json", b'{"version_number": ' + b"9" * 5000 + b"}")
+        write(plugins / "Huge-Mod" / "manifest.json", b'{"name": "' + b"x" * (mods.MANIFEST_LIMIT + 1) + b'"}')
+        for folder in ("Deep-Mod", "Big-Mod", "Huge-Mod"):
+            write(plugins / folder / "bundle", BUNDLE)
+        by_id = {package.id: package for package in mods.discover(plugins)[1]}
+        self.assertEqual(sorted(by_id), ["Big-Mod", "Deep-Mod", "Huge-Mod"])
+        self.assertEqual([(package.name, package.version) for package in by_id.values()], [("Mod", None)] * 3)
+
+    def test_unreadable_folders_are_reported_on_their_package(self):
+        plugins = self.root / "plugins"
+        write(plugins / "Good-Mod" / "bundle", BUNDLE)
+        locked = plugins / "Locked-Mod"
+        locked.mkdir()
+        walk = os.walk
+
+        def failing_walk(top, onerror=None, followlinks=False):
+            for entry in walk(top, followlinks=followlinks):
+                if Path(entry[0]) == locked:  # As os.walk does when listing fails.
+                    onerror(PermissionError(13, "Permission denied", str(locked)))
+                    continue
+                yield entry
+
+        with unittest.mock.patch.object(mods.os, "walk", failing_walk):
+            by_id = {package.id: package for package in mods.discover(plugins)[1]}
+        self.assertEqual(sorted(by_id), ["Good-Mod", "Locked-Mod"])
+        self.assertEqual(by_id["Locked-Mod"].skipped, [(locked, "Folder could not be read: Permission denied.")])
+
+    @unittest.skipUnless(hasattr(os, "mkfifo") and hasattr(os, "symlink"), "Needs FIFOs and symbolic links")
+    def test_manifest_links_and_pipes_are_not_read(self):
+        outside = write(self.root / "outside.json", b'{"name": "Leaked"}')
+        plugins = self.root / "plugins"
+        write(plugins / "Link-Mod" / "bundle", BUNDLE)
+        os.symlink(outside, plugins / "Link-Mod" / "manifest.json")
+        write(plugins / "Pipe-Mod" / "bundle", BUNDLE)
+        os.mkfifo(plugins / "Pipe-Mod" / "manifest.json")
+        self.assertEqual(mods.read_manifest(plugins / "Link-Mod" / "manifest.json"), {})
+        self.assertEqual(mods.read_manifest(plugins / "Pipe-Mod" / "manifest.json"), {})
+        names = sorted(package.name for package in mods.discover(plugins)[1])
+        self.assertEqual(names, ["Mod", "Mod"])
 
     @unittest.skipUnless(hasattr(os, "symlink"), "Symbolic links unsupported")
     def test_symbolic_links_are_not_followed(self):
@@ -382,6 +426,51 @@ class ModShotRuleTests(unittest.TestCase):
         rule = self.rule("Ghost:Acme.Missing")
         self.assertEqual(rule["kind"], "manual")
         self.assertIn("not in a readable installed assembly", rule["reason"])
+
+
+class UntrustedValueTests(unittest.TestCase):
+    def test_stepped_curve_tangents_become_null_and_broken_keys_are_rejected(self):
+        def data(*keys):
+            return {"m_PreInfinity": 2, "m_PostInfinity": 2,
+                    "m_Curve": [dict(zip(("time", "value", "inSlope", "outSlope"), key)) for key in keys]}
+        result = curve(data((0, 1, 0, float("inf")), (10, 2, float("-inf"), 0)))
+        self.assertEqual(result["keys"], [{"time": 0, "value": 1, "inSlope": 0, "outSlope": None},
+                                          {"time": 10, "value": 2, "inSlope": None, "outSlope": 0}])
+        with self.assertRaisesRegex(ValueError, "non-finite key"):
+            curve(data((float("nan"), 1, 0, 0)))
+
+    def test_non_finite_values_are_found_anywhere(self):
+        self.assertEqual(require_finite({"a": [1, {"b": 2.5}]}), {"a": [1, {"b": 2.5}]})
+        with self.assertRaisesRegex(ValueError, "mass"):
+            require_finite({"source": {}, "mass": float("nan")})
+        with self.assertRaises(ValueError):
+            require_finite([{"chambers": [{"barrelLength": float("inf")}]}])
+
+    def test_failures_do_not_publish_local_paths(self):
+        extract.PRIVATE_PATHS.append(Path("/home/someone/r2modman/profiles/Default"))
+        self.addCleanup(extract.PRIVATE_PATHS.pop)
+        message = failure(ValueError("cannot read /home/someone/r2modman/profiles/Default/BepInEx/plugins/A/b"))
+        self.assertEqual(message, "ValueError: cannot read <local>/BepInEx/plugins/A/b")
+        self.assertEqual(failure(PermissionError(13, "Permission denied", "/home/someone/secret")), "PermissionError: Permission denied")
+
+    def test_cyclic_transform_hierarchies_are_rejected(self):
+        def transform(path_id, children):
+            return SimpleNamespace(path_id=path_id, assets_file=SimpleNamespace(name="mod"), type=SimpleNamespace(name="Transform"),
+                                   read_typetree=lambda: {"m_GameObject": None, "m_Children": [{"m_PathID": child} for child in children]})
+        objects = {1: transform(1, [2]), 2: transform(2, [1])}
+        reader = Prefabs.__new__(Prefabs)
+        reader.resolve = lambda obj, pointer: objects.get(pointer["m_PathID"]) if pointer else None
+        reader.components = lambda obj: []
+        with self.assertRaisesRegex(ValueError, "Cyclic"):
+            list(reader.descendants(objects[1]))
+
+    def test_discarded_assemblies_leave_no_classes(self):
+        scripts = mods.ScriptAssemblies(GAME_FAMILIES)
+        module = Module("Broken")
+        module.typedef("Acme", "Gun", game_type("FVRFireArm"))
+        scripts.add(module)
+        scripts.discard("Broken")
+        self.assertEqual((scripts.assemblies, scripts.types, scripts.families()), ({}, {}, {}))
 
 
 class ScriptIdentityTests(unittest.TestCase):

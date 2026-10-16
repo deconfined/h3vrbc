@@ -92,6 +92,7 @@ test("modded entries are labelled, searchable and explained in the app", async (
     "Super Rifles · Clash Gun (Clash): ItemID is defined differently by A, B; left out.",
     "Tools: 2 FVRObjects reuse base-game ItemIDs.",
   ]);
+  assert.equal($("excluded-summary").textContent, "1 unavailable projectile variant — reasons");
   assert.equal($("excluded-rounds").children[0].textContent,
     "Plasma Round · Mod: Super Rifles: No BallisticProjectile; different projectile integrator");
 });
