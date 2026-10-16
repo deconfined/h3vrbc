@@ -122,7 +122,8 @@ class DiscoveryTests(unittest.TestCase):
         root, packages = mods.discover(self.root / "profile")
         self.assertEqual(root, plugins)
         by_id = {package.id: package for package in packages}
-        self.assertEqual(sorted(by_id), ["Acme-Super_Rifles", "LooseFolder", "Old-Mod", "loose_bundle"])
+        # Loose files in plugins form one package, keeping late_ pairs together.
+        self.assertEqual(sorted(by_id), ["Acme-Super_Rifles", "LooseFolder", "Old-Mod", "plugins"])
         rifles = by_id["Acme-Super_Rifles"]
         self.assertEqual((rifles.name, rifles.version, rifles.author), ("Super Rifles", "1.2.0", "Acme"))
         self.assertEqual(rifles.dependencies, ["x-y-1.0.0"])
@@ -134,6 +135,14 @@ class DiscoveryTests(unittest.TestCase):
         record = rifles.describe(root, {path: "digest" for path in rifles.bundles + rifles.dlls})
         self.assertIn({"file": "Acme-Super_Rifles/superrifles", "kind": "bundle", "sha256": "digest"}, record["files"])
         self.assertNotIn("skipped", record)
+
+    def test_mods_disabled_by_the_mod_manager_are_ignored(self):
+        plugins = self.root / "plugins"
+        write(plugins / "Off-Gun" / "manifest.json.old", b"{}")
+        write(plugins / "Off-Gun" / "gun.old", BUNDLE)
+        write(plugins / "Off-Gun" / "Gun.dll.old", b"MZ" + bytes(64))
+        write(plugins / "On-Gun" / "gun", BUNDLE)
+        self.assertEqual([package.id for package in mods.discover(plugins)[1]], ["On-Gun"])
 
     def test_plugins_folder_and_game_folder_are_both_accepted(self):
         plugins = self.root / "game" / "BepInEx" / "plugins"
@@ -223,28 +232,58 @@ class RegistrationTests(unittest.TestCase):
         self.assertEqual([item["mod"] for item in added], ["A"])
         self.assertEqual([type_id for type_id, _ in conflicts], [-5])
 
-    def test_prefab_bundle_follows_late_then_own_then_named_bundle(self):
+    def test_prefab_comes_from_the_late_partner_when_present_else_the_own_bundle(self):
         folder = Path("/plugins/Acme-Rifles")
-        data, late_data, preload = folder / "rifles", folder / "late_rifles", folder / "sub" / "prefabs"
-        contents = {late_data: {"assets/guns/rifle.prefab"}, data: {"assets/guns/rifle.prefab", "assets/other.prefab"},
-                    preload: {"assets/guns/preloaded.prefab"}}
-        anvil = {"AssetName": "Assets/Guns/Rifle.prefab", "Bundle": ""}
-        self.assertEqual(mods.prefab_source(data, anvil, folder, contents), (late_data, "assets/guns/rifle.prefab"))
-        self.assertEqual(mods.prefab_source(data, {"AssetName": "Assets/Other.prefab"}, folder, contents), (data, "assets/other.prefab"))
-        self.assertEqual(mods.prefab_source(data, {"AssetName": "rifle"}, folder, contents), (late_data, "rifle"))
-        named = {"AssetName": "Assets/Guns/Preloaded.prefab", "Bundle": "sub\\prefabs"}
-        # A loose-file package has no folder: the named bundle is beside the item's bundle.
-        self.assertEqual(mods.prefab_source(data, named, folder / "rifles", contents), (preload, "assets/guns/preloaded.prefab"))
-        self.assertIsNone(mods.prefab_source(data, {"AssetName": "Missing"}, folder, contents))
-        self.assertIsNone(mods.prefab_source(data, {"AssetName": ""}, folder, contents))
+        data, late_data, solo = folder / "rifles", folder / "late_rifles", folder / "pistols"
+        contents = {late_data: {"assets/guns/rifle.prefab"}, data: {"assets/other.prefab"}, solo: {"assets/guns/pistol.prefab"}}
+        anvil = {"AssetName": "Assets/Guns/Rifle.prefab", "Bundle": "ignored"}
+        self.assertEqual(mods.prefab_source(data, anvil, contents), (late_data, "assets/guns/rifle.prefab"))
+        self.assertEqual(mods.prefab_source(data, {"AssetName": "rifle"}, contents), (late_data, "rifle"))
+        # The late partner replaces the data bundle entirely, as in the game.
+        self.assertIsNone(mods.prefab_source(data, {"AssetName": "Assets/Other.prefab"}, contents))
+        self.assertEqual(mods.prefab_source(solo, {"AssetName": "Assets/Guns/Pistol.prefab"}, contents), (solo, "assets/guns/pistol.prefab"))
+        self.assertIsNone(mods.prefab_source(solo, {"AssetName": "Missing"}, contents))
+        self.assertIsNone(mods.prefab_source(solo, {"AssetName": ""}, contents))
 
-    def test_named_bundle_is_relative_to_the_package_folder(self):
-        with tempfile.TemporaryDirectory() as directory:
-            folder = Path(directory)
-            data, preload = folder / "rifles", folder / "sub" / "prefabs"
-            named = {"AssetName": "Assets/Guns/Preloaded.prefab", "Bundle": "sub\\prefabs"}
-            contents = {data: set(), preload: {"assets/guns/preloaded.prefab"}}
-            self.assertEqual(mods.prefab_source(data, named, folder, contents), (preload, "assets/guns/preloaded.prefab"))
+    def test_late_pairing_follows_the_loaders_name_rebuild(self):
+        folder = Path("/plugins/Acme")
+        names = [folder / "rifles", folder / "late_rifles", folder / "plate_carrier", folder / "late_plate_carrier", folder / "late_orphan"]
+        self.assertTrue(mods.is_late(folder / "late_rifles", names))
+        self.assertFalse(mods.is_late(folder / "late_orphan", names), "No data bundle: read as data")
+        # Replace("late_", "") turns late_plate_carrier into "pcarrier", so it never pairs.
+        self.assertIsNone(mods.late_partner(folder / "plate_carrier"))
+        self.assertFalse(mods.is_late(folder / "late_plate_carrier", names))
+        contents = {folder / "late_plate_carrier": {"assets/vest.prefab"}, folder / "plate_carrier": set()}
+        self.assertIsNone(mods.prefab_source(folder / "plate_carrier", {"AssetName": "Assets/Vest.prefab"}, contents))
+
+    def test_legacy_folders_never_pair_late_bundles(self):
+        legacy = Path("/game/LegacyVirtualObjects")
+        names = [legacy / "gun", legacy / "late_gun"]
+        self.assertFalse(mods.is_late(legacy / "late_gun", names))
+        contents = {legacy / "late_gun": {"assets/gun.prefab"}, legacy / "gun": {"assets/gun.prefab"}}
+        self.assertEqual(mods.prefab_source(legacy / "gun", {"AssetName": "Assets/Gun.prefab"}, contents)[0], legacy / "gun")
+
+    def test_sodalite_preload_items_name_their_prefab_bundle(self):
+        folder = Path("/plugins/Acme-Rifles")
+        preload, prefabs = folder / "rifles_preload", folder / "sub" / "prefabs"
+        contents = {preload: set(), prefabs: {"assets/guns/preloaded.prefab"}}
+        named = {"AssetName": "Assets/Guns/Preloaded.prefab", "Bundle": "sub\\prefabs"}
+        self.assertEqual(mods.prefab_source(preload, named, contents), (prefabs, "assets/guns/preloaded.prefab"))
+        self.assertIsNone(mods.prefab_source(preload, {"AssetName": "Assets/Guns/Preloaded.prefab"}, contents))
+
+    def test_two_packages_each_defining_an_item_race(self):
+        a, b, c = package("A"), package("B"), package("C")
+        own, copy = {"AssetName": "Assets/Gun.prefab"}, {"AssetName": "Assets/Gun.prefab"}
+        contents = {Path("/A/gun"): {"assets/gun.prefab"}, Path("/B/gun"): {"assets/gun.prefab"}, Path("/C/attachments"): set()}
+        accepted = {
+            "Raced": [(a, Path("/A/gun"), {"m_anvilPrefab": own}), (b, Path("/B/gun"), {"m_anvilPrefab": own})],
+            "Copied": [(a, Path("/A/gun"), {"m_anvilPrefab": own}), (c, Path("/C/attachments"), {"m_anvilPrefab": copy})],
+            "Orphan": [(c, Path("/C/attachments"), {"m_anvilPrefab": {"AssetName": "Assets/None.prefab"}})],
+        }
+        result, races = mods.resolve_definitions(accepted, contents)
+        self.assertEqual([item_id for item_id, _ in races], ["Raced"])
+        self.assertEqual([offer[0].id for offer in result["Copied"]], ["A"])
+        self.assertEqual([offer[0].id for offer in result["Orphan"]], ["C"])
 
 
 class ScriptAssemblyTests(unittest.TestCase):

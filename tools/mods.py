@@ -132,12 +132,15 @@ def _files(root, legacy=False):
         in_legacy = legacy or LEGACY_FOLDER in here.relative_to(root).parts
         for name in sorted(names):
             file = here / name
-            if file.is_symlink() or not file.is_file() or (in_legacy and file.suffix):
+            # Mod managers disable a mod by renaming its files to *.old.
+            if file.is_symlink() or not file.is_file() or (in_legacy and file.suffix) or name.casefold().endswith(".old"):
                 continue
             owner = next((parent for parent in [here, *here.parents]
                           if parent != root and root in parent.parents and (parent / "manifest.json").is_file()), None)
             if owner is None:
-                owner = root / file.relative_to(root).parts[0] if here != root else file
+                # Loose files in the root form one package, so a data bundle and
+                # its late_ partner in one directory are always read together.
+                owner = root / file.relative_to(root).parts[0] if here != root else root
             groups.setdefault(owner, []).append(file)
     return groups
 
@@ -147,8 +150,8 @@ def discover(path, legacy=False):
 
     A package is the nearest folder holding a Thunderstore manifest.json; files
     outside any such folder belong to their top-level folder, and loose files
-    directly in the plugins folder form one package each. Symbolic links are
-    not followed, so a profile cannot pull in files from elsewhere.
+    directly in the plugins folder form one package. Symbolic links are not
+    followed, so a profile cannot pull in files from elsewhere.
 
     MonoMod script libraries (Assembly-CSharp.<Name>.mm.dll) are installed in
     BepInEx/monomod; they join the plugins package of the same folder name.
@@ -455,22 +458,74 @@ def resolve_calibers(built, game_types):
     return added, conflicts
 
 
-def prefab_source(path, anvil, package_path, contents):
+def legacy(path):
+    """Whether PATH is loaded through a LegacyVirtualObjects folder.
+
+    Legacy loading reads every extension-less file as a full data bundle,
+    late_ ones included, and never pairs late_ bundles.
+    """
+    return LEGACY_FOLDER in path.parts
+
+
+def late_partner(path):
+    """The late_ bundle OtherLoader pairs with data bundle PATH, or None.
+
+    RegisterAssetLoadLate rebuilds the data bundle's name with
+    Replace("late_", ""), which removes every occurrence, so a data bundle
+    whose own name contains "late_" (e.g. plate_carrier) never pairs.
+    """
+    if legacy(path) or "late_" in path.name:
+        return None
+    return path.with_name("late_" + path.name)
+
+
+def is_late(path, names):
+    """Whether bundle PATH is a registered late_ bundle, which no loader reads."""
+    if legacy(path) or not path.name.startswith("late_"):
+        return False
+    return any(late_partner(other) == path for other in names)
+
+
+def prefab_source(path, anvil, contents):
     """The bundle Anvil loads an item's prefab from, and the matching key.
 
-    OtherLoader replaces the data bundle with "late_<name>" when that file
-    sits beside it, else the prefab comes from the item's own bundle. Sodalite
-    preload items name their bundle relative to the plugin folder. CONTENTS
-    maps each loaded bundle path to its lower-cased container paths. Returns
-    (bundle path, asset key) or None.
+    OtherLoader overwrites m_anvilPrefab.Bundle with the item's own bundle,
+    and when a late_ partner sits beside it that partner replaces it for every
+    prefab load, so the data bundle itself is no longer searched. Sodalite
+    preload bundles (<package>_preload) are not OtherLoader's: their items
+    name the prefab's bundle relative to the plugin folder. CONTENTS maps each
+    bundle path to its lower-cased container paths. Returns (bundle path,
+    asset key) or None when the game would not find the prefab either.
     """
     asset = str(anvil.get("AssetName") or "").casefold()
     if not asset:
         return None
     named = str(anvil.get("Bundle") or "").replace("\\", "/")
-    explicit = (package_path if package_path.is_dir() else path.parent) / named if named else None
-    for candidate in (path.with_name("late_" + path.name), path, explicit):
-        names = contents.get(candidate, ())
-        if asset in names or any(Path(name).stem == asset for name in names):
-            return candidate, asset
+    if path.name.casefold().endswith("_preload"):
+        candidate = path.parent / named if named else None
+    else:
+        partner = late_partner(path)
+        candidate = partner if partner in contents else path
+    names = contents.get(candidate, ())
+    if asset in names or any(Path(name).stem == asset for name in names):
+        return candidate, asset
     return None
+
+
+def resolve_definitions(accepted, contents):
+    """Split accepted items into full definitions and copies.
+
+    An offer whose own package holds its prefab is a definition; any other
+    offer is a copy carried by a bundle that references the item. Two
+    packages each defining the same item race to register it, so such items
+    are returned as races. Returns (accepted, races): accepted maps ItemID to
+    its defining offers (or every offer when none defines it).
+    """
+    result, races = {}, []
+    for item_id, offers in accepted.items():
+        defining = [offer for offer in offers if prefab_source(offer[1], offer[2].get("m_anvilPrefab") or {}, contents)]
+        if len({package.id for package, _, _ in defining}) > 1:
+            races.append((item_id, defining))
+        else:
+            result[item_id] = defining or offers
+    return result, races

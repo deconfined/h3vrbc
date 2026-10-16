@@ -232,6 +232,10 @@ def extract(root, output, mod_dirs=()):
     inputs = [{"file": "Managed/Assembly-CSharp.dll", "sha256": checksum},
               {"file": "resources.assets", "sha256": digest(game / "resources.assets")}]
     mod_issues = []
+    caliber_notes = {}  # Why a mod-defined caliber was left out, by round type.
+
+    def unknown_caliber(type_id):
+        return caliber_notes.get(type_id, f"Caliber {type_id} is not defined by the game or an installed mod") + "."
 
     def contain(mod, wrapper, action):
         """Run ACTION; for mod content, record a failure instead of aborting."""
@@ -324,8 +328,13 @@ def extract(root, output, mod_dirs=()):
         """Read one bundle's catalogued prefabs and exported round prefabs.
 
         LOOKUP maps a container root (asset stem, full container path) to its
-        FVRObject, or None when that root is not a catalogued item.
+        FVRObject (or a list of them, when several items share one prefab), or
+        None when that root is not a catalogued item.
         """
+        def items_for(stem, full):
+            found = lookup(stem, full)
+            return [] if found is None else found if isinstance(found, list) else [found]
+
         prefab_names, prefab_paths, root_objects = {}, {}, {}
         for container in objects:
             if container.type.name == "AssetBundle":
@@ -340,12 +349,12 @@ def extract(root, output, mod_dirs=()):
         prefab_reader.mount_names = mount_names
         matched = set()
         for key, root_obj in root_objects.items():
-            asset_name = prefab_names[key]
-            wrapper = lookup(asset_name, prefab_paths[key])
-            if wrapper is None or root_obj.type.name != "GameObject":
+            if root_obj.type.name != "GameObject":
                 continue
-            matched.add(wrapper["ItemID"])
-            contain(mod, wrapper, lambda: read_prefab(prefab_reader, root_obj, wrapper, {**source, "assetName": asset_name}, mod))
+            asset_name = prefab_names[key]
+            for wrapper in items_for(asset_name, prefab_paths[key]):
+                matched.add(wrapper["ItemID"])
+                contain(mod, wrapper, lambda: read_prefab(prefab_reader, root_obj, wrapper, {**source, "assetName": asset_name}, mod))
         for obj in objects:
             if mod is None:
                 classname = assets.classname(obj)
@@ -368,10 +377,8 @@ def extract(root, output, mod_dirs=()):
                 continue
             # Some prefabs have erroneous ObjectWrapper links (e.g. .357 SIG JHP
             # points to .357 Magnum JHP). Use the original exported asset identity.
-            wrapper = lookup(asset_name, prefab_paths[(root_obj.assets_file.name, root_obj.path_id)])
-            if wrapper is None:
-                continue
-            contain(mod, wrapper, lambda: read_round(obj, data, wrapper, {**source, "assetName": asset_name}, mod))
+            for wrapper in items_for(asset_name, prefab_paths[(root_obj.assets_file.name, root_obj.path_id)]):
+                contain(mod, wrapper, lambda: read_round(obj, data, wrapper, {**source, "assetName": asset_name}, mod))
         return matched
 
     def read_mods(directories):
@@ -402,6 +409,11 @@ def extract(root, output, mod_dirs=()):
 
         def issue(package, item_id, name, reason):
             mod_issues.append({"mod": package.id, "id": item_id, "name": name, "reason": reason})
+
+        for _, package in packages:
+            if "otherloaderpatched" in package.id.casefold().replace("-", "").replace("_", ""):
+                issue(package, None, None, "OtherLoaderPatched is closed source; its duplicate, merge and load-order rules could not be "
+                                           "verified, so this extraction follows OtherLoader 1.3.7.")
 
         # Script assemblies first: bundles name their scripts' assemblies, and
         # inheritance decides what a mod component is.
@@ -458,11 +470,9 @@ def extract(root, output, mod_dirs=()):
                     bundles.append((path, bundle))
             return env, bundles
 
-        def late(path, names):
-            return path.name.startswith("late_") and path.with_name(path.name[len("late_"):]) in names
-
-        # Pass 1: catalogue items, ammunition display data and accuracy charts.
-        offered, displays, charts = {}, [], []
+        # Pass 1: catalogue items, ammunition display data, accuracy charts and
+        # each bundle's contents (to find where every prefab lives).
+        offered, displays, charts, contents = {}, [], [], {}
         for _, package in packages:
             if not package.bundles:
                 continue
@@ -471,7 +481,12 @@ def extract(root, output, mod_dirs=()):
             names = {path for path, _ in bundles}
             assets.embedded = True
             for path, bundle in bundles:
-                if late(path, names):
+                try:
+                    contents[path] = {name.casefold() for item in bundle_objects(bundle) if item.type.name == "AssetBundle"
+                                      for name, _ in item.read_typetree()["m_Container"]}
+                except Exception as error:  # Third-party data.
+                    package.skipped.append((path, f"Unreadable bundle contents: {failure(error)}"))
+                if mods.is_late(path, names):
                     continue  # Registered as a prefab source only; the loaders never read it.
                 for obj in bundle_objects(bundle):
                     if obj.type.name != "MonoBehaviour":
@@ -486,9 +501,15 @@ def extract(root, output, mod_dirs=()):
                             data = assets.full(obj)
                             members = []
                             for entry in data.get("Classes", []):
-                                target = deref(obj, entry["ObjectID"])
-                                if target is not None:
-                                    members.append(assets.full(target)["ItemID"])
+                                # The loader registers the caliber without
+                                # resolving its classes, so one unresolvable
+                                # (cross-package) class must not drop it.
+                                try:
+                                    target = deref(obj, entry["ObjectID"])
+                                    if target is not None:
+                                        members.append(assets.full(target)["ItemID"])
+                                except Exception:  # Third-party data.
+                                    continue
                             displays.append((package, {"file": obj.assets_file.name, "pathId": str(obj.path_id)}, data, members))
                         elif name == "FVRFireArmMechanicalAccuracyChart":
                             charts.append((package, assets.full(obj)["Entries"]))
@@ -499,12 +520,20 @@ def extract(root, output, mod_dirs=()):
             assets.forget()
             gc.collect()
 
+        def conflict(offers, what):
+            providers = sorted({package.id for package, _, _ in offers})
+            reason = (f"ItemID is {what} by {', '.join(providers)}; the game keeps whichever loads first, so it is left out."
+                      if len(providers) > 1 else
+                      f"ItemID is {what} more than once in this package; the loader keeps whichever it reads first, so it is left out.")
+            for package, _, data in offers:
+                issue(package, item_id, data.get("DisplayName"), reason)
+
         accepted, conflicts, reused = mods.resolve_items(offered, {item["ItemID"] for item in catalog.values()})
         for item_id, offers in conflicts:
-            providers = ", ".join(sorted({package.id for package, _, _ in offers}))
-            for package, _, data in offers:
-                issue(package, item_id, data.get("DisplayName"),
-                      f"ItemID is defined differently by {providers}; the game keeps whichever loads first, so it is left out.")
+            conflict(offers, "defined differently")
+        accepted, races = mods.resolve_definitions(accepted, contents)
+        for item_id, offers in races:
+            conflict(offers, "defined with its own prefab")
         for package_id, count in sorted(reused.items()):
             mod_issues.append({"mod": package_id, "id": None, "name": None,
                                "reason": f"{count} FVRObject{'s' if count != 1 else ''} reuse base-game ItemIDs (usually copies of referenced game items); the loader keeps the game's items."})
@@ -533,11 +562,15 @@ def extract(root, output, mod_dirs=()):
                     "source": source, "mod": package.id}))
             except Exception as error:  # Third-party data.
                 issue(package, None, f"Caliber {data.get('Type')}", failure(error))
+                caliber_notes.setdefault(data.get("Type"), f"Caliber {data.get('Type')} has unreadable curves in {package.id}")
         added, conflicts = mods.resolve_calibers(built, game_types)
         for type_id, owners_of in conflicts:
             for package in owners_of:
                 issue(package, None, f"Caliber {type_id}", "Defined with different curves by several mods; the game uses whichever loads first, so it is left out.")
+            caliber_notes[type_id] = f"Caliber {type_id} is defined with different curves by {', '.join(sorted({item.id for item in owners_of}))}"
         calibers.extend(added)
+        for item in added:
+            caliber_notes.pop(item["id"], None)
 
         # Firearms take their caliber from the prefab's FVRFireArm (as the game
         # does at runtime); the catalogue value is only a fallback.
@@ -547,9 +580,8 @@ def extract(root, output, mod_dirs=()):
                 weapons[item_id] = {"id": item_id, "name": data["DisplayName"], "caliberId": data.get("RoundType"), "chambers": [],
                                     "presetUnavailable": "No standard firearm prefab configuration found.", "mod": package.id}
 
-        # Pass 2: read each package's prefabs. An item's prefab is resolved like
-        # Anvil does: in "late_<bundle>" when present, else the item's own bundle,
-        # else the bundle its m_anvilPrefab names (Sodalite preload layout).
+        # Pass 2: read each package's prefabs, from the bundle Anvil loads them
+        # from (see mods.prefab_source).
         by_package = {}
         for item_id, offers in accepted.items():
             for package, path, data in offers:
@@ -561,22 +593,15 @@ def extract(root, output, mod_dirs=()):
                 print(f"Reading mod {package.id}", flush=True)
                 env, bundles = open_package(package)
                 assets.embedded = True
-                contents = {}
-                for path, bundle in bundles:
-                    try:
-                        contents[path] = {name.casefold() for item in bundle_objects(bundle) if item.type.name == "AssetBundle"
-                                          for name, _ in item.read_typetree()["m_Container"]}
-                    except Exception as error:  # Third-party data.
-                        package.skipped.append((path, f"Unreadable bundle contents: {failure(error)}"))
                 index = {}
                 for path, data in items:
-                    source = mods.prefab_source(path, data.get("m_anvilPrefab") or {}, package.path, contents)
+                    source = mods.prefab_source(path, data.get("m_anvilPrefab") or {}, contents)
                     if source is not None:
-                        index[source] = data
+                        index.setdefault(source, []).append(data)
                 for path, bundle in bundles:
                     def lookup(stem, full, bundle_path=path):
-                        data = index.get((bundle_path, full.casefold())) or index.get((bundle_path, stem.casefold()))
-                        return data if data is not None and data["ItemID"] not in claimed else None
+                        found = index.get((bundle_path, full.casefold())) or index.get((bundle_path, stem.casefold())) or []
+                        return [data for data in found if data["ItemID"] not in claimed]
                     try:
                         found = read_bundle(list(bundle_objects(bundle)), lookup,
                                             {"bundle": path.relative_to(plugins).as_posix()}, package, scripts)
@@ -614,11 +639,15 @@ def extract(root, output, mod_dirs=()):
                       f"No prefab {(data.get('m_anvilPrefab') or {}).get('AssetName')!r} in the item's bundle, its late_ bundle or the bundle it names.")
             if item_id in weapons:
                 weapon = weapons[item_id]
-                if item_id not in claimed and not data.get("UsesRoundTypeFlag"):
-                    del weapons[item_id]  # No prefab and no catalogued caliber: nothing usable.
+                chambered = any(chamber.get("caliberId") in caliber_ids for chamber in weapon.get("chambers", []))
+                if not data.get("UsesRoundTypeFlag") and not chambered:
+                    # As for the game's own items: a firearm must use rounds.
+                    del weapons[item_id]
+                    if item_id in claimed:
+                        issue(package, item_id, data.get("DisplayName"), "Fires no rounds the calculator knows: no round-type flag and no readable chamber.")
                 elif weapon["caliberId"] not in caliber_ids:
                     del weapons[item_id]
-                    issue(package, item_id, data.get("DisplayName"), f"Caliber {weapon['caliberId']} is not defined by the game or an installed mod.")
+                    issue(package, item_id, data.get("DisplayName"), unknown_caliber(weapon["caliberId"]))
                 elif isinstance(weapon.get("accuracyClass"), int) and weapon["accuracyClass"] not in class_ids:
                     # Without a chart entry neither dispersion nor device bias is known.
                     weapon["accuracyClassUnavailable"] = weapon.pop("accuracyClass")
@@ -650,8 +679,8 @@ def extract(root, output, mod_dirs=()):
         if item["caliberId"] not in caliber_ids or item["mass"] <= 0 or item["diameter"] <= 0 or item["muzzleVelocity"] <= 0:
             if "mod" not in item:
                 raise ValueError(f"Missing or invalid physical data: {item['id']}")
-            reason = (f"Caliber {item['caliberId']} is not defined by the game or an installed mod" if item["caliberId"] not in caliber_ids
-                      else "Missing or invalid physical data (mass, diameter or velocity)")
+            reason = (unknown_caliber(item["caliberId"]) if item["caliberId"] not in caliber_ids
+                      else "Missing or invalid physical data (mass, diameter or velocity).")
             excluded.append({"id": item["id"], "name": item["name"], "reason": reason, "mod": item["mod"]})
             continue
         valid.append(item)
