@@ -675,9 +675,13 @@ def extract(root, output, mod_dirs=()):
                     package.skipped.append((path, f"Unreadable file: {failure(error)}"))
             package.skipped = list(dict.fromkeys(package.skipped))
             for path, reason in package.skipped:
-                # Duplicate or game-owned assemblies lose nothing; anything else may.
-                if not reason.startswith(("Copy of game assembly", "Generated MonoMod hook", "Assembly ")):
-                    issue(package, None, mods._relative(path, plugins), f"File not read: {reason}")
+                # Duplicate or game-owned assemblies lose nothing, nor does an
+                # archive left beside installed content; anything else may.
+                if reason.startswith(("Copy of game assembly", "Generated MonoMod hook", "Assembly ")):
+                    continue
+                if reason.startswith("Packed mod archive") and (package.bundles or package.dlls):
+                    continue
+                issue(package, None, mods._relative(path, plugins), f"File not read: {reason}")
             record = package.describe(plugins, digests)
             hooked = hooks.get(package.id)
             if hooked and (hooked["classes"] or hooked["dynamic"]):

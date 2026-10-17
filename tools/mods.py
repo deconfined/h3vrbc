@@ -445,7 +445,7 @@ def item_identity(data):
     """
     anvil = data.get("m_anvilPrefab") or {}
     return json.dumps([data.get("DisplayName"), data.get("Category"), data.get("RoundType"),
-                       data.get("UsesRoundTypeFlag"), str(anvil.get("AssetName") or "").casefold()])
+                       data.get("UsesRoundTypeFlag"), str(anvil.get("AssetName") or "").replace("\\", "/").casefold()])
 
 
 def resolve_items(offered, game_ids):
@@ -551,8 +551,11 @@ def prefab_source(path, anvil, contents):
     name the prefab's bundle relative to the plugin folder. CONTENTS maps each
     bundle path to its lower-cased container paths. Returns (bundle path,
     asset key) or None when the game would not find the prefab either.
+
+    Many mods author AssetName with Windows separators (Assets\\Guns\\X.prefab)
+    and load fine in game, so separators are normalised to the bundle's "/".
     """
-    asset = str(anvil.get("AssetName") or "").casefold()
+    asset = str(anvil.get("AssetName") or "").replace("\\", "/").casefold()
     if not asset:
         return None
     named = str(anvil.get("Bundle") or "").replace("\\", "/")

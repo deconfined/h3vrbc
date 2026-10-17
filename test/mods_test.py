@@ -287,6 +287,9 @@ class RegistrationTests(unittest.TestCase):
         self.assertIsNone(mods.prefab_source(data, {"AssetName": "Assets/Other.prefab"}, contents))
         self.assertEqual(mods.prefab_source(solo, {"AssetName": "Assets/Guns/Pistol.prefab"}, contents), (solo, "assets/guns/pistol.prefab"))
         self.assertIsNone(mods.prefab_source(solo, {"AssetName": "Missing"}, contents))
+        # Windows separators, alone or mixed, name the same container path.
+        for name in ("Assets\\Guns\\Pistol.prefab", "Assets/Guns\\Pistol.prefab"):
+            self.assertEqual(mods.prefab_source(solo, {"AssetName": name}, contents), (solo, "assets/guns/pistol.prefab"))
         self.assertIsNone(mods.prefab_source(solo, {"AssetName": ""}, contents))
 
     def test_late_pairing_follows_the_loaders_name_rebuild(self):
