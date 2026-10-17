@@ -12,6 +12,7 @@ const settings = {
   accuracyClasses: [
     { id: 33, dropMult: 0.8999999761581421, driftMult: 2 },
     { id: 100, dropMult: 1.100000023841858, driftMult: 2 },
+    { id: 41, dropMult: 0.8999999761581421, driftMult: 1.2000000476837158 },
     { id: 101, dropMult: 1.399999976158142, driftMult: 4 },
   ],
 };
@@ -55,6 +56,23 @@ test("verified firearm/device identities produce a repeatable fixed yaw rather t
   assert.ok(result.target.lateral > 0, "Positive device yaw moves the group right");
   assert.ok(result.target.windageMoa < 0, "The required correction is left");
   assert.deepEqual(calculate(profile, settings, attached), result);
+});
+
+test("positive device pitch launches downward and negative pitch upward", () => {
+  // MRAD + Corded nets an upward launch; the Corded Tan, with its own identity
+  // hash, nets a downward one (see docs/muzzle-devices.md).
+  const mrad = { name: "MRAD", hashId: "MRAD", accuracyClass: 41 };
+  const corded = { name: "Corded", hashId: "SuppressorCorded", accuracyClass: 101, kind: "suppressor" };
+  const tan = { name: "Corded Tan", hashId: "SuppressorCordedTan", accuracyClass: 101, kind: "suppressor" };
+  const bare = calculate(profile, settings, { ...options, weapon: mrad });
+  const up = calculate(profile, settings, { ...options, weapon: mrad, attachments: [corded] });
+  const down = calculate(profile, settings, { ...options, weapon: mrad, attachments: [tan] });
+  close(up.muzzleEffects.pitchDegrees, -0.01941070333123207, 1e-12);
+  close(down.muzzleEffects.pitchDegrees, 0.024701381102204323, 1e-12);
+  assert.ok(up.target.height > bare.target.height, "Negative pitch lands high");
+  assert.ok(up.target.elevationMoa < bare.target.elevationMoa, "and needs a downward correction");
+  assert.ok(down.target.height < bare.target.height, "Positive pitch lands low");
+  assert.ok(up.target.lateral < 0 && down.target.lateral < 0, "Both Corded variants yaw left on the MRAD");
 });
 
 test("fixed angular drift grows approximately linearly with range", () => {

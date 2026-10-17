@@ -26,21 +26,29 @@ export function digitsFor(value) {
   return Math.max(0, Math.min(3, Math.ceil(-Math.log10(value / 10))));
 }
 
-// The scope-adjustment callouts must report a value the optic can actually be set
-// to, not the solved ideal. The tuning grid is a per-optic tick, so the displayed
-// figure is the nearest reachable click at a precision derived from that click: the
-// finest optic in the game resolves 0.073 mrad and most are 0.145 mrad, so a third
-// decimal place claims more than any of them can be dialled.
+// The offset callouts show where the base shot lands relative to the aim point,
+// as an angle: the negated solved aim correction (+ is high or right). The fix is
+// the opposite, so the detail line names the dial direction in words, which
+// holds whatever sign a scope's own readout uses.
 //
-// The callout shows the negated solved correction. Snapping to the click grid is
-// symmetric about zero, so negating before or after rounding gives the same
-// answer. A click of null means the optic serializes no tick, and the solved value
-// is reported at the previous precision rather than snapped to a guess.
-export function formatDialedSetting(solvedMrad, clickMrad, { zeroLabel = "no adjustment", scopeLabel = "scope setting" } = {}) {
+// The figure is snapped to what the optic can actually correct, not the solved
+// ideal. The tuning grid is a per-optic tick, so it is the nearest reachable click
+// at a precision derived from that click: the finest optic in the game resolves
+// 0.073 mrad and most are 0.145 mrad, so a third decimal place claims more than
+// any of them can be dialled. Snapping is symmetric about zero, so negating before
+// or after rounding gives the same answer. A click of null means the optic
+// serializes no tick, and the solved value is reported at the previous precision
+// rather than snapped to a guess.
+//
+// TOWARDS names the dial direction for a positive and a negative correction,
+// e.g. ["up", "down"]; AXIS qualifies it, e.g. " (weapon axis)".
+export function formatImpactOffset(solvedMrad, clickMrad, { zeroLabel = "no adjustment", towards = ["up", "down"], axis = "" } = {}) {
   const displayed = -solvedMrad;
   const isZero = Math.abs(solvedMrad) < 1e-7;
+  const direction = `${solvedMrad > 0 ? towards[0] : towards[1]}${axis}`;
   if (!(clickMrad > 0))
-    return { mrad: fmt(normaliseZero(displayed), 3), moa: fmt(normaliseZero(displayed * MOA_PER_MRAD), 2), snapped: false, clicks: null, suffix: isZero ? zeroLabel : scopeLabel };
+    return { mrad: fmt(normaliseZero(displayed), 3), moa: fmt(normaliseZero(displayed * MOA_PER_MRAD), 2), snapped: false, clicks: null,
+      suffix: isZero ? zeroLabel : `dial ${direction} to correct` };
   const clicks = Math.round(displayed / clickMrad);
   const dialled = clicks * clickMrad;
   return {
@@ -49,6 +57,6 @@ export function formatDialedSetting(solvedMrad, clickMrad, { zeroLabel = "no adj
     snapped: true,
     clicks: normaliseZero(clicks),
     suffix: isZero ? zeroLabel
-      : `${Math.abs(clicks)} click${Math.abs(clicks) === 1 ? "" : "s"} · ${scopeLabel}`,
+      : `${Math.abs(clicks)} click${Math.abs(clicks) === 1 ? "" : "s"} ${direction} to correct`,
   };
 }

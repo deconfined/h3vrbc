@@ -210,14 +210,14 @@ test("simulation scene selection refreshes visible limits without silently chang
   assert.equal($("export-csv").disabled, true);
 });
 
-test("top adjustment callouts invert aim corrections in both units while the range card remains unchanged", async (t) => {
+test("top offset callouts invert aim corrections in both units while the range card remains unchanged", async (t) => {
   const { dom, close } = await mount(dataset, "scope-adjustments");
   t.after(close);
   const $ = (id) => dom.window.document.getElementById(id);
   await waitFor(() => !$('solution').hidden || !$('load-error').hidden);
   assert.equal($("load-error").hidden, true, $("load-error").textContent);
-  assert.equal($("hold-label").textContent.trim(), "ELEVATION ADJUSTMENT");
-  assert.equal($("windage-label").textContent, "WINDAGE ADJUSTMENT");
+  assert.equal($("hold-label").textContent.trim(), "ELEVATION OFFSET");
+  assert.equal($("windage-label").textContent, "WINDAGE OFFSET");
   const set = (id, value, type = "input") => {
     $(id).value = value;
     $(id).dispatchEvent(new dom.window.Event(type, { bubbles: true }));

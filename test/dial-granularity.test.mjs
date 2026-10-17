@@ -262,18 +262,18 @@ test("the serialized tick resolves to the right number of milliradians", () => {
 });
 
 test("a displayed adjustment is a whole number of clicks, in both units", () => {
-  const { MOA_PER_MRAD, digitsFor, formatDialedSetting } = formatModule;
+  const { MOA_PER_MRAD, digitsFor, formatImpactOffset } = formatModule;
   // 1 MOA is 1/60 degree; the mrad conversion is the one the range card uses.
   close(MOA_PER_MRAD, 3.4377468, 1e-6);
   // The click sizes actually present in the game.
   for (const click of [0.0727, 0.1, 0.1454, 0.2, 0.25, 0.2909, 0.5, 1.0, 4.83]) {
     // A solved value part-way between clicks snaps to a whole number of them.
-    // The callout is the negated correction, so a negative correction is the one
-    // that raises the optic and reads as a positive click count.
-    const shown = formatDialedSetting(-click * 7.4, click);
+    // The callout is the negated correction: a downward correction means the
+    // shot lands high, so it reads as a positive offset fixed by dialling down.
+    const shown = formatImpactOffset(-click * 7.4, click);
     assert.equal(shown.snapped, true);
     close(shown.clicks, 7, 1e-9);
-    assert.match(shown.suffix, /^7 clicks · /);
+    assert.equal(shown.suffix, "7 clicks down to correct");
     // Printed at a precision the click can actually be dialled to.
     const digits = shown.mrad.split(".")[1]?.length ?? 0;
     assert.ok(digits >= 1 && digits <= 3, `click ${click} printed at ${digits} decimals`);
@@ -285,20 +285,23 @@ test("a displayed adjustment is a whole number of clicks, in both units", () => 
   // Digits track the click: coarse optics print fewer places.
   assert.ok(digitsFor(4.83) <= digitsFor(0.0727));
   assert.ok(digitsFor(0.0727) <= 3);
-  // A positive correction is the one that lowers the optic, so it reads negative
-  // and carries the mirrored click count.
-  const positive = formatDialedSetting(0.1454 * 3.4, 0.1454);
+  // A positive (upward) correction means the shot lands low, so the offset reads
+  // negative, with the mirrored click count and the fix named as "up".
+  const positive = formatImpactOffset(0.1454 * 3.4, 0.1454);
   assert.equal(positive.clicks, -3);
-  assert.match(positive.suffix, /^3 clicks · /);
-  assert.ok(Number(positive.mrad) < 0, `expected a lowered optic, got ${positive.mrad}`);
+  assert.equal(positive.suffix, "3 clicks up to correct");
+  assert.ok(Number(positive.mrad) < 0, `expected a low impact, got ${positive.mrad}`);
+  const left = formatImpactOffset(-0.1 * 5, 0.1, { towards: ["right", "left"], axis: " (weapon axis)" });
+  assert.equal(left.mrad, "0.50");
+  assert.equal(left.suffix, "5 clicks left (weapon axis) to correct");
   // No serialized tick: report the solved value, unsnapped, and say so.
-  const unknown = formatDialedSetting(2.028, null, { zeroLabel: "no elevation adjustment" });
+  const unknown = formatImpactOffset(2.028, null, { zeroLabel: "no elevation adjustment" });
   assert.equal(unknown.snapped, false);
   assert.equal(unknown.mrad, "-2.028");
   close(Number(unknown.moa), -2.028 * MOA_PER_MRAD, 0.01);
-  assert.match(unknown.suffix, /scope setting/);
+  assert.equal(unknown.suffix, "dial up to correct");
   // A centred axis says so instead of quoting zero clicks.
-  const centred = formatDialedSetting(0, 0.1454, { zeroLabel: "no elevation adjustment" });
+  const centred = formatImpactOffset(0, 0.1454, { zeroLabel: "no elevation adjustment" });
   assert.equal(centred.clicks, 0);
   assert.equal(centred.mrad, "0.00");
   assert.equal(centred.suffix, "no elevation adjustment");

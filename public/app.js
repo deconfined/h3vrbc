@@ -5,7 +5,7 @@ import { compatibleOpticMounts, opticGeometry, searchOptics, slidingOpticMount }
 import { createFavoriteStore } from "./favorites.js";
 import { createInterfaceStore } from "./interface-state.js";
 import { renderTrajectoryChart } from "./trajectory-chart.js";
-import { clickMradFromDegrees, fmt, formatDialedSetting } from "./format.js";
+import { clickMradFromDegrees, fmt, formatImpactOffset } from "./format.js";
 import { solve } from "./solver-worker.js";
 import { modById, modNote, modSearchText, modSuffix, modSummary } from "./mods.js";
 
@@ -1046,15 +1046,15 @@ function syncFlightControls() {
 
 function render(solution, options, round) {
   const tiltedDials = options.cantMode === "specific" && options.cantDegrees !== 0;
-  // Scope/reticle settings are the inverse of the solved weapon aim changes.
-  // Do not invert the launch angles, range card, or CSV's aim corrections.
-  const scopeSetting = tiltedDials ? "scope setting (weapon axis)" : "scope setting";
+  // The callouts show where the base shot lands (the negated aim correction);
+  // the fix is the opposite. The range card and CSV keep the aim corrections.
+  const axis = tiltedDials ? " (weapon axis)" : "";
 // The click, from the selected optic's own serialized tick.
   const clickMrad = (axis) => clickMradFromDegrees(options.adjustmentTicks?.[axis]?.degrees);
-  const elevation = formatDialedSetting(solution.target.elevationMrad, clickMrad("elevation"),
-  { zeroLabel: "no elevation adjustment", scopeLabel: scopeSetting });
-const windage = formatDialedSetting(solution.target.windageMrad, clickMrad("windage"),
-  { zeroLabel: "no windage adjustment", scopeLabel: scopeSetting });
+  const elevation = formatImpactOffset(solution.target.elevationMrad, clickMrad("elevation"),
+  { zeroLabel: "no elevation adjustment", towards: ["up", "down"], axis });
+const windage = formatImpactOffset(solution.target.windageMrad, clickMrad("windage"),
+  { zeroLabel: "no windage adjustment", towards: ["right", "left"], axis });
 $("hold-value").textContent = elevation.mrad;
 $("hold-secondary").textContent = `${elevation.moa} MOA · ${elevation.suffix}`;
 $("windage-value").textContent = windage.mrad;

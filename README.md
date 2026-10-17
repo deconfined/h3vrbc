@@ -129,7 +129,7 @@ The per-row time in the table is therefore not the flight time of the plotted
 curve. Their offsets, times and speeds differ, and only the corrected flight is
 aimed at the target.
 
-The top **ELEVATION ADJUSTMENT** and **WINDAGE ADJUSTMENT** callouts give the required scope/reticle setting changes from the base zero in mrad and MOA. Their signs are **the inverse of the solved aim corrections**, not instructions to raise/lower aim. With specific cant, they use the weapon's tilted elevation/windage axes. Each is a full-height cell and carries its own **Base POI** line underneath: the elevation cell reports the base shot's height offset and the windage cell its lateral offset, each in centimetres in the unrolled sight frame. These describe the base shot, not the corrected impact.
+The top **ELEVATION OFFSET** and **WINDAGE OFFSET** callouts give **where the base shot lands** relative to the aim point, as an angle from the base zero in mrad and MOA: positive is high or right. They are the solved aim corrections with the sign inverted. The correction is the opposite, and each detail line names it in words (`5 clicks right to correct`). With specific cant, they use the weapon's tilted elevation/windage axes. Each is a full-height cell and carries its own **Base POI** line underneath: the elevation cell reports the base shot's height offset and the windage cell its lateral offset, each in centimetres in the unrolled sight frame. These describe the base shot, not the corrected impact.
 
 The range card and **Export CSV** retain the **uncorrected** offsets, time and speed at the base optic setting, alongside the original aim corrections: positive elevation means raise aim; positive windage means aim right. Positive lateral point of impact means the uncorrected projectile is right of the aim point in the unrolled sight frame. Metadata also records cant assumptions, selected-range uncertainty bounds, and every dispersion component with its interpretation.
 
@@ -257,11 +257,12 @@ So the usual click is **0.145 mrad**, and most optics are coarser than 0.1 mrad.
 Three optics serialize no tick size at all and are given **no** granularity band
 rather than a plausible default.
 
-The **ELEVATION ADJUSTMENT** and **WINDAGE ADJUSTMENT** callouts follow the same
-grid: each shows the **nearest reachable click**, not the solved ideal, at a
-precision derived from that optic's click — two decimals for the 0.145 mrad
-majority, three only for the sub-0.1 mrad optics, one for the coarsest. The
-detail line names the click count (`33 clicks · scope setting`). With no optic
+The **ELEVATION OFFSET** and **WINDAGE OFFSET** callouts follow the same
+grid: each shows the offset the **nearest reachable click** corrects, not the
+solved ideal, at a precision derived from that optic's click — two decimals for
+the 0.145 mrad majority, three only for the sub-0.1 mrad optics, one for the
+coarsest. The detail line names the click count and direction
+(`33 clicks down to correct`). With no optic
 selected the grid is unknown, so the solved value is reported at the previous
 precision and left unsnapped rather than guessed. This matters: quoting
 `-4.804 mrad` for an optic whose nearest click is `-4.930` or `-4.785` describes

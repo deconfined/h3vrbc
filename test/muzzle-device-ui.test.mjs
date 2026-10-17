@@ -88,8 +88,9 @@ test("muzzle picker renders scope-setting signs opposite the aim corrections ret
   set("target-range", "500");
   await recalculate();
   assert.equal($("solution").hidden, false, $("calculation-error").textContent);
+  // The callout is where the shot lands (right), and the fix is the opposite.
   assert.ok(Number($("windage-value").textContent) > 0);
-  assert.match($("windage-secondary").textContent, /scope setting/);
+  assert.match($("windage-secondary").textContent, /clicks? left to correct|dial left to correct/);
   assert.match($("lateral-label").textContent, /right of POA/);
   const row = $("range-rows").querySelector(".target-row");
   assert.equal(row.children.length, 10);
