@@ -308,7 +308,20 @@
                     step="any"
                     required
                   />
-                  <p class="field-note">Values describe the optical origin relative to the bare weapon muzzle and remain editable. Selected devices add their forward shift to setback and subtract their up shift from sight height automatically. No device: these are the effective values.</p>
+                  <label for="sight-lateral">Bare-muzzle optic lateral offset <span>cm</span></label>
+                  <input
+                    id="sight-lateral"
+                    name="sightLateral"
+                    type="number"
+                    value="0"
+                    min="-100"
+                    max="100"
+                    step="any"
+                    aria-describedby="sight-lateral-note"
+                    required
+                  />
+                  <p class="field-note" id="sight-lateral-note">Seen from behind: positive puts the optic right of the bore, negative left, e.g. on offset risers that clear a long barrel.</p>
+                  <p class="field-note">Values describe the optical origin relative to the bare weapon muzzle and remain editable. Selected devices add their forward shift to setback and subtract their up shift from sight height automatically; they never shift the lateral offset. No device: these are the effective values.</p>
                   <label for="firing-angle">Firing angle <span>°</span></label>
                   <input
                     id="firing-angle"
@@ -532,7 +545,7 @@
                 </div>
               </div>
               <p class="cant-result" id="cant-result" role="status" hidden></p>
-              
+              <p class="sight-clearance" id="sight-clearance" role="status" hidden></p>
               <div class="chart-frame">
                 <div
                   class="chart-scroll"
@@ -728,10 +741,16 @@
             simulated.
           </p>
           <p>
-            Sight geometry assumes a centered, bore-aligned optic with no
-            initial elevation/windage dial trim. Enter optical-origin height and
-            setback relative to the bare weapon muzzle, not the outer lens
-            position. Selected device geometry supplies the change to the active
+            Sight geometry assumes a forward-facing, uncanted optic with no
+            initial elevation/windage dial trim; it may sit to one side of the
+            bore, as on offset risers. Enter optical-origin height, setback and
+            lateral offset relative to the bare weapon muzzle, not the outer
+            lens position. The authored zero rules toe a sideways optic in to
+            the bore line at the zero distance, as they tilt a raised one down.
+            Each result reports where the corrected line of sight passes the
+            bore axis; barrel and device thickness are not known, so whether
+            that line is actually blocked is for you to judge.
+            Selected device geometry supplies the change to the active
             muzzle; the model and CSV use the resulting effective values. Nominal optic
             distance is measured along the bore from the muzzle; chart/table
             range is distance along the selected sight line from the optical
@@ -744,8 +763,9 @@
             flight only, not spread or submunition paths.
           </p>
           <p>
-            Weapon cant rolls the centered weapon/optic setup about the sight
-            ray; positive cant tilts weapon-up right as viewed through the optic.
+            Weapon cant rolls the whole weapon/optic setup, including any sideways
+            optic offset, about the sight ray; positive cant tilts weapon-up right
+            as viewed through the optic.
             Specific cant is included in the two-axis solve. Alternatively, cant
             uncertainty samples 21 angles across a nonzero ± tolerance around
             a level nominal setup, keeping its solved dials fixed. The purple

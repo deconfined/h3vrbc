@@ -518,8 +518,25 @@ select {
   border: 1px solid var(--border);
   border-radius: 4px;
 }
-.cant-warning {
+/* Where the corrected line of sight passes the barrel: the same box as the cant
+   summary, in neutral text until the line runs close to the bore axis. */
+.sight-clearance {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.6;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.cant-result:not([hidden]) + .sight-clearance {
+  margin-top: 8px;
+}
+.cant-warning,
+.sight-clearance-warning {
   color: var(--accent);
+}
+.sight-clearance-warning {
+  border-color: var(--accent);
 }
 .chart-scroll {
   overflow-x: auto;

@@ -23,7 +23,7 @@ SHA-256: `033e275871f798eeab5d6cdf0c7ace348cdff2acf9588b1a6c1a46805f20a76b`
 | `BallisticProjectile.UpdateVelocity` | 856608 | Ordinary free-flight velocity receives world-down gravity and direction-preserving drag. There is no wind, Coriolis, or spin-drift term in this path. |
 | `BallisticProjectile.ApplyDrag` | 855672 | Drag changes speed along the current velocity direction, not an independent sideways acceleration. |
 
-For the ordinary centered, uncanted setup, the fixed horizontal angle is:
+The fixed horizontal angle, in the weapon's frame and independent of where the optic sits, is:
 
 ```text
 horizontal drift in MOA =
@@ -52,6 +52,7 @@ These are an example of the source rule, not a claim about the user's unknown lo
 
 - **Random dispersion:** `FVRFireArm.Fire` averages three `Random.insideUnitCircle` samples and scales the result by round spread plus firearm and device mechanical spread. This widens a group in both axes rather than imposing a repeatable left/right mean, which is why it cannot appear as a signed mean. The random direction is sampled per projectile; the firearm and device **magnitudes** are each drawn once in `Awake`, so the group is fixed within a session but not reproducible across sessions. The calculator therefore reports the authored bounds of that draw as a cone rather than a simulated group; see [dispersion and spawn-offset notes](dispersion.md).
 - **Optic alignment/windage:** sight geometry and windage adjustments can shift the aiming line. `PIPScope.UpdateZero` applies two-axis scope/reticle adjustments; `ReflexSightController.Zero` explicitly uses `ReticleWindageMagnitude` and `ReticleWindageAdjustmentPerTick`.
+- **Lateral optic offset:** an optic beside the bore (a sideways offset riser or a stock side mount) under an authored zero toes in to the zero point on the bore line. The base shot then crosses the sight line laterally only at the zero distance and misses toward the optic's side beyond it, by an amount that grows with range; with **No base zero adjustment** it stays the full offset to the bore's side. The calculator models this through the lateral sight offset; see [the README](../README.md#lateral-sight-offset-and-sight-line-clearance).
 - **Cant:** gun/optic roll can make world-down gravity and zero compensation appear partly sideways relative to the reticle. This is distinct from uphill/downhill pitch. The calculator's firing-angle control is pitch, not roll.
 - **Special flight behavior or mods:** these conclusions cover the standard pre-impact `BallisticProjectile` path, not ricochets, guidance, additional projectile controllers, or mods.
 
@@ -61,7 +62,7 @@ The website now exposes all **84 extracted catalogued muzzle devices**, with sea
 
 `public/muzzle-devices.js` composes certified stock single-barrel mounting geometry, including the root mount's scale modifier and forward submount chains. It adjusts chamber-to-active-muzzle velocity distance and effective optical height/setback rather than pretending devices affect only drift. Stock geometry assumes inner-to-outer registration order. Missing, sliding, reversible, scaled-parent or off-axis mounts do not get guessed values: users must explicitly enter and confirm measured geometry for a centered, forward/bore-aligned muzzle. Unsupported sideways or backward-facing launches are not modeled. See [the complete inventory and mounting rules](muzzle-devices.md).
 
-The website still assumes a centered, uncanted optic with no dial trim, and does not simulate random spread. Selecting a weapon **without adding devices** supplies no added device bias. A standard centered, uncanted bare shot therefore still has zero lateral drift even with a nonzero firing angle. This feature does not explain the reported **bare MRAD** offset.
+The website assumes an optic with no dial trim and no cant relative to the weapon, centred over the bore unless a lateral sight offset is entered, and does not simulate random spread. Selecting a weapon **without adding devices** supplies no added device bias. A bare, uncanted shot with a centred optic therefore still has zero lateral drift even with a nonzero firing angle; a lateral sight offset adds the range-dependent miss described above. This feature does not explain the reported **bare MRAD** offset.
 
 ## Specific reported case: MRAD + .338 Lapua AP + VRZ 6–36×
 
@@ -72,7 +73,7 @@ Checked stock assets:
 - MRAD: `DefaultMuzzleState = 0`, `MuzzleDevices = []`, no current suppressor/brake. Muzzle forward is exactly `(0, 0, 1)` in the authored root frame. No baked-in muzzle yaw.
 - `.338 Lapua Cartridge AP`: ordinary `BallisticProjectile`, one projectile, `spreadDegrees = 0`, base speed 1000 m/s; no AP-specific lateral flight term.
 - VRZ 6–36×, both black and bronze: authored optical transforms have no material yaw; factory scope/reticle windage magnitudes are zero. `ZeroScaling = MRAD`, `ScopeWindageAdjustmentPerTick = 0.10000000149`. A five-click windage discrepancy would therefore produce 0.5 mrad. Factory zero does not establish the live scope's setting.
-- The centered, uncanted calculator model predicts zero lateral offset for this rifle/round at 1215 m. The reported 0.5 mrad corresponds to approximately **0.6075 m** lateral displacement.
+- On the MRAD's top rail the VRZ's optical origin sits over the bore (lateral offset 0 at every rail position), so the uncanted calculator model predicts zero lateral offset for this rifle/round at 1215 m. The reported 0.5 mrad corresponds to approximately **0.6075 m** lateral displacement.
 
 The long-range setup is also sensitive to **cant (roll), which is not the calculator's firing-angle/pitch setting**. An exploratory level-shot simulation expresses gravity in a rolled optic frame while keeping the same vanilla gravity/drag/timing rules. With realistic gravity, 7.5 cm sight height and 60 cm setback as approximate geometry, it gives:
 

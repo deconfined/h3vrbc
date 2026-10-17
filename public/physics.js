@@ -534,7 +534,11 @@ export function calculate(profile, settings, options) {
   // In B = Ry(yaw) Rx(-pitch) the pitch above is unchanged by that toe-in.
   const boreYaw = mathematical ? mathematical.yaw : options.zeroModel === "unadjusted" ? 0
     : Math.atan2(options.sightLateral, Math.hypot(options.zeroRange + options.sightSetback, options.sightHeight - authoredDrop));
-  const settingRange = options.zeroModel === "unadjusted" ? null : mathematical ? options.zeroRange : Math.hypot(options.zeroRange + options.sightSetback, authoredDrop - options.sightHeight, options.sightLateral);
+  // Nested, not one three-argument hypot: hypot(x, 0) is exactly x, so a centred
+  // optic keeps the previous setting range bit for bit. hypot(a, b, 0) can round
+  // differently once |b| outgrows a (a zero of a few centimetres, say).
+  const settingRange = options.zeroModel === "unadjusted" ? null : mathematical ? options.zeroRange
+    : Math.hypot(Math.hypot(options.zeroRange + options.sightSetback, authoredDrop - options.sightHeight), options.sightLateral);
   const cardRanges = new Set([options.targetRange]);
   for (let range = options.rangeStep; range < options.targetRange; range += options.rangeStep) cardRanges.add(range);
   let settingCardRange = null;

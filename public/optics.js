@@ -72,7 +72,7 @@ export function opticGeometry(weapon, chamber, optic, mount, railPosition = 0.5)
     const origin = position.map((value, i) => value + offset[i]);
     if (dot(direction(axes, optical[2]), bore[2]) < 1 - TOLERANCE
       || dot(direction(axes, optical[1]), bore[1]) < 1 - TOLERANCE)
-      throw new Error("Canted, reversed or non-bore-aligned optics require a model beyond this centered sight geometry.");
+      throw new Error("Canted, reversed or non-bore-aligned optics require a model beyond this forward-facing, bore-aligned sight geometry.");
     const delta = subtract(origin, muzzle.position);
     // Positive lateral: the optical origin sits right of the bore, seen from behind.
     const lateral = dot(delta, bore[0]);

@@ -33,6 +33,13 @@ const presetFields = [
   ["chamber-multiplier", "chamberMultiplier"],
   ["velocity-multiplier", "velocityMultiplier"],
 ];
+// Bare-muzzle sight inputs in cm, and the opticGeometry() fields in metres
+// that fill them.
+const sightFields = [
+  ["sight-height", "sightHeight"],
+  ["sight-setback", "sightSetback"],
+  ["sight-lateral", "sightLateral"],
+];
 let currentSolution = null;
 let currentOptions = null;
 let worker = null;
@@ -138,10 +145,8 @@ function selectedOpticGeometry() {
 }
 
 function usesOpticGeometry(geometry) {
-  return !geometry.reason && Number.isFinite($("sight-height").valueAsNumber)
-    && Number.isFinite($("sight-setback").valueAsNumber)
-    && Math.abs($("sight-height").valueAsNumber / 100 - geometry.sightHeight) < 1e-10
-    && Math.abs($("sight-setback").valueAsNumber / 100 - geometry.sightSetback) < 1e-10;
+  return !geometry.reason && sightFields.every(([id, key]) => Number.isFinite($(id).valueAsNumber)
+    && Math.abs($(id).valueAsNumber / 100 - geometry[key]) < 1e-10);
 }
 
 function filterOptics() {
@@ -175,9 +180,10 @@ function showOpticNote() {
     ? ` Rail position ${fmt($("optic-rail-position").valueAsNumber, 1)}%; 50% assumes the midpoint, not a measured live pose.` : "";
   const zero = optic.defaultZeroRange > 0
     ? ` Authored default zero setting: ${optic.defaultZeroRange} m.` : " No positive authored zero setting; the current range input is retained.";
-  $("optic-note").textContent = `${geometry.reason ? `${geometry.reason} Enter sight height/setback manually if appropriate for the centered model.`
+  const lateral = geometry.sightLateral ? `; ${directional(geometry.sightLateral * 100, "cm", "right of the bore", "left of the bore")}` : "";
+  $("optic-note").textContent = `${geometry.reason ? `${geometry.reason} Enter sight height, setback and lateral offset manually if appropriate for a forward-facing, uncanted optic.`
     : custom ? "Manual sight geometry overrides; restore to reapply optic defaults."
-      : `Stock direct-mount defaults: height ${fmt(geometry.sightHeight * 100, 3)} cm; setback ${fmt(geometry.sightSetback * 100, 3)} cm from the bare muzzle.`}
+      : `Stock direct-mount defaults: height ${fmt(geometry.sightHeight * 100, 3)} cm; setback ${fmt(geometry.sightSetback * 100, 3)} cm from the bare muzzle${lateral}.`}
     ${rail}${zero} ${optic.zeroModel === "unadjusted" ? "This PIP optic has no base zero adjustment." : ""} Optical origin: ${optic.originRule ?? "unavailable"}. ${modNote(optic, modsById)} Source: ${optic.source.bundle}/${optic.source.assetName}. Forward-facing stock poses are not live animation measurements.`;
 }
 
@@ -191,8 +197,7 @@ function showOpticMountControls() {
 function applyOpticGeometry() {
   if (selectedOptic()) {
     const geometry = selectedOpticGeometry();
-    $("sight-height").value = geometry.sightHeight === null ? "" : geometry.sightHeight * 100;
-    $("sight-setback").value = geometry.sightSetback === null ? "" : geometry.sightSetback * 100;
+    for (const [id, key] of sightFields) $(id).value = geometry[key] === null ? "" : geometry[key] * 100;
     if (geometry.reason) revealField($("sight-height"));
   }
   showOpticNote();
@@ -930,6 +935,8 @@ function readOptions() {
     velocityMultiplier: Number(values.get("velocityMultiplier")),
     sightHeight: Number(values.get("sightHeight")) / 100 - geometry.upShift,
     sightSetback: Number(values.get("sightSetback")) / 100 + geometry.forwardShift,
+    // Muzzle devices mount on the bore axis, so they never shift it sideways.
+    sightLateral: Number(values.get("sightLateral")) / 100,
     // The model works in sight-line range. A horizontal request is converted
     // here so nothing downstream has to know the user picked the other unit.
     targetRange: sightLineRange(Number(values.get("targetRange")), values.get("rangeMode") ?? "sight",
@@ -1044,6 +1051,28 @@ function syncFlightControls() {
   $("flight-play").title = available ? "" : "Playback needs an animated frame clock in this browser; the chart and callout still work.";
 }
 
+// Where the corrected line of sight passes the bore axis. A large elevation
+// correction tilts it down into the barrel; the model does not know how thick
+// the barrel, handguard or device is, so it gives the distances and warns once
+// the line comes within 3 cm of the axis, above or below it, after the correction
+// has used up at least half of the optic's own offset (so a low sight on a pistol
+// is not flagged on every shot). Compared at the displayed millimetre, a line
+// shown as 3.0 cm away is never called closer than 3 cm.
+function showSightClearance(clearance, options) {
+  const note = $("sight-clearance");
+  // An optic at or ahead of the muzzle has no barrel under its line of sight.
+  note.hidden = !clearance;
+  if (!clearance) return;
+  const { atMuzzle, closest } = clearance;
+  const cm = (value) => fmt(Math.abs(value) * 100, 1);
+  const side = cm(atMuzzle.right) === "0.0" ? "beside" : atMuzzle.right > 0 ? "right of" : "left of";
+  const behind = fmt(Math.max(0, closest.behindMuzzle) * 100, 0);
+  const limit = Math.min(0.03, Math.hypot(options.sightHeight, options.sightLateral ?? 0) / 2);
+  const blocked = Math.round(closest.distance * 1000) < Math.round(limit * 1000);
+  note.classList.toggle("sight-clearance-warning", blocked);
+  note.textContent = `Corrected line of sight at the muzzle: ${cm(atMuzzle.up)} cm ${atMuzzle.up < 0 ? "below" : "above"} and ${cm(atMuzzle.right)} cm ${side} the bore axis; closest ${cm(closest.distance)} cm from the axis, ${behind === "0" ? "at the muzzle" : `${behind} cm behind the muzzle`}. A barrel, suppressor or handguard with a larger radius there blocks the view${blocked ? ": raise the optic or offset it sideways" : ""}.`;
+}
+
 function render(solution, options, round) {
   const tiltedDials = options.cantMode === "specific" && options.cantDegrees !== 0;
   // The callouts show where the base shot lands (the negated aim correction);
@@ -1104,6 +1133,7 @@ $("windage-secondary").textContent = `${windage.moa} MOA · ${windage.suffix}`;
     : uncertainty?.complete
       ? `Cant uncertainty ±${fmt(uncertainty.toleranceDegrees, 1)}°: lateral POI ${fmt(uncertainty.target.lateralMin * 100)} to ${fmt(uncertainty.target.lateralMax * 100)} cm (${fmt(uncertainty.target.lateralMinMrad, 3)} to ${fmt(uncertainty.target.lateralMaxMrad, 3)} mrad from aim); height ${fmt(uncertainty.target.heightMin * 100)} to ${fmt(uncertainty.target.heightMax * 100)} cm. ${uncertainty.samples.length} sampled angles with the displayed dials held fixed; not a statistical confidence interval.`
       : uncertainty ? `Cant uncertainty cannot be bounded at this range: sampled angles ${uncertainty.unreachableAngles.map((angle) => fmt(angle, 1)).join(", ")}° exceed the projectile or scene limits. The nominal solution remains valid; no partial uncertainty band is shown.` : "";
+  showSightClearance(solution.sightClearance, options);
   $("range-rows").replaceChildren();
   for (const row of solution.rows) {
     const tr = document.createElement("tr");
@@ -1254,7 +1284,7 @@ async function start() {
     if (["ammo-search", "weapon-search", "muzzle-search", "muzzle-kind", "muzzle-device", "optic-search"].includes(event.target.id)) return;
     if (event.target.id === "cant-mode") updateCantControls();
     if (event.target.id === "optic-rail-position") applyOpticGeometry();
-    if (["sight-height", "sight-setback"].includes(event.target.id)) showOpticNote();
+    if (sightFields.some(([id]) => id === event.target.id)) showOpticNote();
     if (event.target.id === "shot-charge") {
       $("velocity-multiplier").value = selectedPreset()?.velocityMultiplier ?? "";
     }
