@@ -74,13 +74,12 @@ export function opticGeometry(weapon, chamber, optic, mount, railPosition = 0.5)
       || dot(direction(axes, optical[1]), bore[1]) < 1 - TOLERANCE)
       throw new Error("Canted, reversed or non-bore-aligned optics require a model beyond this centered sight geometry.");
     const delta = subtract(origin, muzzle.position);
+    // Positive lateral: the optical origin sits right of the bore, seen from behind.
     const lateral = dot(delta, bore[0]);
-    if (Math.abs(lateral) > TOLERANCE)
-      throw new Error(`Optical origin is ${(lateral * 100).toFixed(3)} cm off-axis; this centered model cannot reproduce lateral sight offset.`);
     const sightHeight = dot(delta, bore[1]);
     if (sightHeight < 0) throw new Error("An optical origin below the bore is outside the supported sight-height inputs.");
-    return { sightHeight, sightSetback: -dot(delta, bore[2]), reason: null };
+    return { sightHeight, sightSetback: -dot(delta, bore[2]), sightLateral: Math.abs(lateral) > TOLERANCE ? lateral : 0, reason: null };
   } catch (error) {
-    return { sightHeight: null, sightSetback: null, reason: error.message };
+    return { sightHeight: null, sightSetback: null, sightLateral: null, reason: error.message };
   }
 }

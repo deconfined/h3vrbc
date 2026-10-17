@@ -185,11 +185,14 @@ function trace(ctx, pitch, yaw, ranges) {
   const cy = f(Math.cos(yaw)), sy = f(Math.sin(yaw));
   const ci = ctx.inclinationCos, si = ctx.inclinationSin;
   // The optical origin is the pivot. Spawn offset is along the unperturbed muzzle.
+  // A sideways optic (positive sightLateral: optic right of the bore) puts the
+  // muzzle to its left; pitch leaves that component alone and yaw turns it.
   const setback = f(o.sightSetback - SPAWN_RECESS_METRES);
+  const lateral = f(-f(o.sightLateral ?? 0));
   const muzzleForward = f(f(setback * cp) + f(f(o.sightHeight) * sp));
   const muzzleUp = f(f(setback * sp) - f(f(o.sightHeight) * cp));
-  const muzzleAlong = f(muzzleForward * cy);
-  const muzzleRight = f(muzzleForward * sy);
+  const muzzleAlong = f(f(muzzleForward * cy) - f(lateral * sy));
+  const muzzleRight = f(f(lateral * cy) + f(muzzleForward * sy));
   // Positive cant tilts weapon-up toward the shooter's right. Roll the entire
   // muzzle pose around the sight ray, then incline it; gravity stays world-down.
   const spawnRight = ctx.cantDegrees === 0 ? muzzleRight : f(f(muzzleRight * ctx.cantCos) + f(muzzleUp * ctx.cantSin));
@@ -392,7 +395,7 @@ function validate(profile, options) {
     if (!Number.isFinite(options[key]) || options[key] <= 0) throw new Error(`${key} must be positive and finite.`);
   for (const key of ["barrelLength", "sightHeight", "firstStep", "gravity"])
     if (!Number.isFinite(options[key]) || options[key] < 0) throw new Error(`${key} must be nonnegative and finite.`);
-  for (const key of ["sightSetback", "worldHeight", "catchHeight", "inclinationDegrees"])
+  for (const key of ["sightSetback", "sightLateral", "worldHeight", "catchHeight", "inclinationDegrees"])
     if (!Number.isFinite(options[key])) throw new Error(`${key} must be finite.`);
   if (Math.abs(options.inclinationDegrees) > 90) throw new Error("Sight-line inclination must be between -90° and +90°.");
   if (!Array.isArray(options.attachments)) throw new Error("An ordered muzzle-device list is required.");
@@ -493,8 +496,30 @@ function statedRange(options) {
   return Number.isFinite(options.enteredRange) ? options.enteredRange : options.targetRange;
 }
 
+// Where the corrected sight line passes the bore axis between the optic and the
+// active muzzle, in the weapon's own frame (right, up, forward from the muzzle).
+// A sight line dialled far below the bore runs into the barrel; this says how
+// close it comes, without knowing how thick the barrel or device is.
+//
+// The bore is B = Ry(yaw) Rx(-pitch) relative to the sight, so the sight line in
+// bore coordinates runs along (-sin yaw, -cos yaw sin pitch, cos yaw cos pitch)
+// from the optical origin at (lateral, height, -setback).
+export function sightClearance(options, pitch, yaw) {
+  const span = options.sightSetback;
+  if (!(span > 0)) return null; // The optic sits at or ahead of the muzzle.
+  const right0 = options.sightLateral ?? 0, up0 = options.sightHeight;
+  const dx = -Math.sin(yaw), dy = -Math.cos(yaw) * Math.sin(pitch), dz = Math.cos(yaw) * Math.cos(pitch);
+  if (!(dz > 0)) return null;
+  const end = span / dz;
+  const at = (t) => ({ right: right0 + t * dx, up: up0 + t * dy, behindMuzzle: span - t * dz });
+  const lean = dx * dx + dy * dy;
+  const closestT = lean > 0 ? Math.max(0, Math.min(end, -(right0 * dx + up0 * dy) / lean)) : 0;
+  const closest = at(closestT);
+  return { atMuzzle: at(end), closest: { ...closest, distance: Math.hypot(closest.right, closest.up) } };
+}
+
 export function calculate(profile, settings, options) {
-  options = { inclinationDegrees: 0, attachments: [], cantMode: "none", cantDegrees: 0, cantToleranceDegrees: 0, ...options };
+  options = { inclinationDegrees: 0, attachments: [], cantMode: "none", cantDegrees: 0, cantToleranceDegrees: 0, sightLateral: 0, ...options };
   validate(profile, options);
   // Resolve dispersion before integrating anything: an uncertified accuracy
   // class is an input error, and the user should not wait out a full solve to
@@ -504,8 +529,12 @@ export function calculate(profile, settings, options) {
   const authoredDrop = options.zeroModel === "game" ? evaluateCurve(options.caliber.opticDropCurve, f(f(options.zeroRange) * f(0.0010000000474974513))) : 0;
   const mathematical = options.zeroModel === "calculated" ? solveAim(ctx, options.zeroRange) : null;
   const boreAngle = mathematical ? mathematical.pitch : options.zeroModel === "unadjusted" ? 0 : Math.atan2(options.sightHeight - authoredDrop, options.zeroRange + options.sightSetback);
-  const boreYaw = mathematical ? mathematical.yaw : 0;
-  const settingRange = options.zeroModel === "unadjusted" ? null : mathematical ? options.zeroRange : Math.hypot(options.zeroRange + options.sightSetback, authoredDrop - options.sightHeight);
+  // The authored rules aim the optic at a point on the bore line at the zero
+  // distance, so a sideways optic toes in to it as a raised one tilts down.
+  // In B = Ry(yaw) Rx(-pitch) the pitch above is unchanged by that toe-in.
+  const boreYaw = mathematical ? mathematical.yaw : options.zeroModel === "unadjusted" ? 0
+    : Math.atan2(options.sightLateral, Math.hypot(options.zeroRange + options.sightSetback, options.sightHeight - authoredDrop));
+  const settingRange = options.zeroModel === "unadjusted" ? null : mathematical ? options.zeroRange : Math.hypot(options.zeroRange + options.sightSetback, authoredDrop - options.sightHeight, options.sightLateral);
   const cardRanges = new Set([options.targetRange]);
   for (let range = options.rangeStep; range < options.targetRange; range += options.rangeStep) cardRanges.add(range);
   let settingCardRange = null;
@@ -589,7 +618,8 @@ export function calculate(profile, settings, options) {
     // the round lands where the base shot does. That offset is already solved.
     dial.windageUnavailable = { lateral: targetRow.lateral };
   }
-  return { muzzleSpeed: ctx.muzzleSpeed, barrelFactor: ctx.barrelFactor, boreAngle, boreYaw, authoredDrop, settingRange, muzzleEffects: ctx.effects, target: targetRow, rows, points, correctedFlight, cantUncertainty: uncertainty, maxDistance: ctx.maxDistance, spread, targetSpread, dial, solve };
+  return { muzzleSpeed: ctx.muzzleSpeed, barrelFactor: ctx.barrelFactor, boreAngle, boreYaw, authoredDrop, settingRange, muzzleEffects: ctx.effects, target: targetRow, rows, points, correctedFlight, cantUncertainty: uncertainty, maxDistance: ctx.maxDistance, spread, targetSpread, dial, solve,
+    sightClearance: sightClearance(options, targetAim.pitch, targetAim.yaw) };
 }
 
 export function toCSV(solution, profile, options) {
@@ -617,10 +647,14 @@ export function toCSV(solution, profile, options) {
     ["Corrected cant lateral max cm", solution.cantUncertainty?.target ? solution.cantUncertainty.target.lateralMax * 100 : ""],
     ["Corrected cant lateral min mrad", solution.cantUncertainty?.target?.lateralMinMrad ?? ""],
     ["Corrected cant lateral max mrad", solution.cantUncertainty?.target?.lateralMaxMrad ?? ""],
+    ["Corrected sight line at active muzzle, up from bore axis cm", solution.sightClearance ? solution.sightClearance.atMuzzle.up * 100 : ""],
+    ["Corrected sight line at active muzzle, right of bore axis cm", solution.sightClearance ? solution.sightClearance.atMuzzle.right * 100 : ""],
+    ["Corrected sight line closest approach to bore axis cm", solution.sightClearance ? solution.sightClearance.closest.distance * 100 : ""],
+    ["Corrected sight line closest approach, behind active muzzle cm", solution.sightClearance ? solution.sightClearance.closest.behindMuzzle * 100 : ""],
     ["Corrected cant height min cm", solution.cantUncertainty?.target ? solution.cantUncertainty.target.heightMin * 100 : ""],
     ["Corrected cant height max cm", solution.cantUncertainty?.target ? solution.cantUncertainty.target.heightMax * 100 : ""],
     ["Bore pitch relative to sight degrees", solution.boreAngle / DEG], ["Bore yaw relative to sight degrees", solution.boreYaw / DEG],
-    ["Sight height m", options.sightHeight], ["Sight setback m", options.sightSetback], ["Effective chamber-to-muzzle distance m", options.barrelLength],
+    ["Sight height m", options.sightHeight], ["Sight setback m", options.sightSetback], ["Sight lateral offset m (+ right of bore)", options.sightLateral ?? 0], ["Effective chamber-to-muzzle distance m", options.barrelLength],
     ["Chamber multiplier", options.chamberMultiplier], ["Shot multiplier", options.velocityMultiplier],
     ["Fixed drop MOA", solution.muzzleEffects.dropMoa], ["Vertical device drift MOA", solution.muzzleEffects.verticalDriftMoa], ["Horizontal device drift MOA", solution.muzzleEffects.horizontalDriftMoa],
     ["Dispersion round spread degrees", solution.spread.roundDegrees],

@@ -52,6 +52,17 @@ test("geometry projects into the selected barrel's bore frame, not global Y/Z", 
   close(opticGeometry(weapon, second, optic, mountProfile).sightSetback, 0.2);
 });
 
+test("a sideways optical origin is reported as a lateral offset, not rejected", () => {
+  const offset = opticGeometry(weapon, chamber, { ...optic, opticalPose: pose([0.01, 0.03, -0.1]) }, mountProfile);
+  assert.equal(offset.reason, null);
+  close(offset.sightLateral, 0.01);
+  close(offset.sightHeight, 0.05);
+  close(offset.sightSetback, 0.4);
+  const left = opticGeometry(weapon, chamber, { ...optic, opticalPose: pose([-0.025, 0.03, -0.1]) }, mountProfile);
+  close(left.sightLateral, -0.025);
+  assert.equal(opticGeometry(weapon, chamber, optic, mountProfile).sightLateral, 0);
+});
+
 test("unknown, unsupported or explicitly invalid geometry stays null rather than guessed", () => {
   const cases = [
     [weapon, chamber, optic, null],
@@ -62,7 +73,6 @@ test("unknown, unsupported or explicitly invalid geometry stays null rather than
     [weapon, chamber, optic, mountProfile, 1.1],
     [weapon, { ...chamber, muzzlePose: null }, optic, mountProfile],
     [weapon, chamber, { ...optic, geometryUnavailable: "Live pose needed." }, mountProfile],
-    [weapon, chamber, { ...optic, opticalPose: pose([0.01, 0.03, -0.1]) }, mountProfile],
     [weapon, chamber, optic, { ...mountProfile, parentPose: { ...pose(), scale: [2, 2, 2] } }],
     [weapon, chamber, optic, { ...mountProfile, pose: { ...pose(), up: [1, 0, 0] } }],
     [weapon, chamber, { ...optic, rootPose: { ...pose(), scale: [2, 2, 2] } }, mountProfile],
@@ -71,6 +81,7 @@ test("unknown, unsupported or explicitly invalid geometry stays null rather than
     const result = opticGeometry(...args);
     assert.equal(result.sightHeight, null);
     assert.equal(result.sightSetback, null);
+    assert.equal(result.sightLateral, null);
     assert.ok(result.reason);
   }
 });
