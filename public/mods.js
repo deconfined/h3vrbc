@@ -23,11 +23,11 @@ export function modNote(item, mods) {
 export function modSummary(data) {
   if (!data.mods) return "";
   const patched = data.mods.filter((mod) => mod.gameHooks?.ballistics?.length);
-  const unresolved = data.mods.filter((mod) => mod.gameHooks?.unresolvedHarmonyPatches && !mod.gameHooks.ballistics?.length);
+  const unresolved = data.mods.filter((mod) => mod.gameHooks?.unresolvedPatches && !mod.gameHooks.ballistics?.length);
   const parts = [`${data.mods.length} installed mod package${data.mods.length === 1 ? "" : "s"} read.`];
   if (patched.length)
     parts.push(`Patching ballistic game code (not modeled): ${patched.map((mod) => `${modName(mod)} (${mod.gameHooks.ballistics.join(", ")})`).join("; ")}.`);
   if (unresolved.length)
-    parts.push(`Runtime Harmony patches with targets not determinable offline: ${unresolved.map(modName).join(", ")}.`);
+    parts.push(`Runtime patches with targets not determinable offline: ${unresolved.map(modName).join(", ")}.`);
   return parts.join(" ");
 }

@@ -118,11 +118,32 @@ class Assets:
         self.classes.clear()
 
 
-# Game classes whose runtime patching can change what this model computes.
-BALLISTIC_CLASSES = {"AM", "BallisticProjectile", "FVRFireArm", "FVRFireArmChamber", "FVRFireArmRound",
-                     "FVRFireArmRoundDisplayData", "FVRFireArmMechanicalAccuracyChart", "FVRFireArmAttachment",
-                     "FVRFireArmAttachmentMount", "MuzzleDevice", "PIPScopeController", "ReflexSightController",
-                     "FVRSceneSettings"}
+# Game methods whose behavior this model reproduces (docs/*.md trace each one);
+# None means every method of the class matters. A runtime patch of one of these,
+# or of an unknown method of such a class, can change what the model computes.
+MODELLED_METHODS = {
+    "AM": None, "BallisticProjectile": None, "FVRFireArmRoundDisplayData": None,
+    "FVRFireArmMechanicalAccuracyChart": None,
+    "FVRFireArm": {"Awake", "Fire", "UpdateCurrentMuzzle", "GetCombinedFixedDrift", "GetCombinedFixedDrop",
+                   "GetCombinedMuzzleDeviceAccuracy"},
+    "MuzzleDevice": {"Awake", "GetDriftMult", "GetDropMult", "ObjectIDsToFloatHash"},
+    "FVRFireArmAttachment": {"AttachToMount", "ScaleToMount"},
+    "FVRFireArmAttachmentInterface": {"OnAttach"},
+    "FVRFireArmAttachmentMount": {"GetRootMount"},
+    "PIPScope": {"ZeroToWorldPoint", "UpdateZero", "GetCameraOffset", "GetCameraIntersectionPoint"},
+    "PIPScopeController": {"UpdateScopeParams"},
+    "ReflexSightController": {"Zero"},
+    "Amplifier": {"Awake", "Zero"},
+}
+
+
+def modelled(owner, method, families):
+    """Whether patching OWNER.METHOD (method None: unknown) can change the model."""
+    for ancestor in families.get(owner, [owner]):
+        methods = MODELLED_METHODS.get(ancestor, ())
+        if methods is None or (ancestor in MODELLED_METHODS and (method is None or method in methods)):
+            return True
+    return False
 
 
 def bundle_objects(file):
@@ -485,20 +506,28 @@ def extract(root, output, mod_dirs=()):
                     continue
                 try:
                     scripts.add(module, path)
-                    classes, dynamic = scripts.game_hooks(name)
+                    patched, dynamic = scripts.game_hooks(name)
                 except Exception as error:  # Malformed third-party metadata.
                     scripts.discard(name)
                     package.skipped.append((path, f"Unreadable assembly metadata: {failure(error)}"))
                     continue
                 owners[name] = package
-                record = hooks.setdefault(package.id, {"classes": set(), "dynamic": False})
-                record["classes"].update(classes)
+                record = hooks.setdefault(package.id, {"methods": set(), "dynamic": False})
+                record["methods"].update(patched)
                 record["dynamic"] = record["dynamic"] or dynamic
                 try:
                     assets.generator.load_dll(path.read_bytes())
                 except Exception as error:  # Embedded type trees still work without it.
                     package.skipped.append((path, f"Script layouts unavailable: {failure(error)}"))
         families.update(scripts.families())
+
+        def game_methods(owner):
+            """Method names OWNER has in the game assembly, inherited included."""
+            names = set()
+            for ancestor in families.get(owner, [owner]):
+                if ancestor in types:
+                    names.update(str(entry.row.Name) for entry in types[ancestor].MethodList)
+            return names
         assets.injected = scripts.injected()
         assets.game_types = {(str(row.TypeNamespace), str(row.TypeName)) for row in pe.net.mdtables.TypeDef}
 
@@ -684,10 +713,18 @@ def extract(root, output, mod_dirs=()):
                 issue(package, None, mods._relative(path, plugins), f"File not read: {reason}")
             record = package.describe(plugins, digests)
             hooked = hooks.get(package.id)
-            if hooked and (hooked["classes"] or hooked["dynamic"]):
-                classes = sorted(hooked["classes"])
-                record["gameHooks"] = {"classes": classes, "unresolvedHarmonyPatches": hooked["dynamic"],
-                                       "ballistics": sorted(name for name in classes if BALLISTIC_CLASSES & set(families.get(name, [name])))}
+            if hooked and (hooked["methods"] or hooked["dynamic"]):
+                patched = {(owner, method if method is None or method in game_methods(owner) else None)
+                           for owner, method in hooked["methods"]}
+                # A name that is not a method of the class (e.g. a Harmony
+                # argument name) is dropped when the class has other patches.
+                patched = {(owner, method) for owner, method in patched
+                           if method is not None or not any(other == owner and name for other, name in patched)}
+
+                def label(owner, method):
+                    return f"{owner}.{method or '*'}"
+                record["gameHooks"] = {"methods": sorted(label(*pair) for pair in patched), "unresolvedPatches": hooked["dynamic"],
+                                       "ballistics": sorted(label(*pair) for pair in patched if modelled(*pair, families))}
             records.append(record)
 
         caliber_ids = {item["id"] for item in calibers}

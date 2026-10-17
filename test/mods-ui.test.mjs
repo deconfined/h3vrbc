@@ -8,8 +8,8 @@ const curve = (value) => ({ keys: [{ time: 0, value, inSlope: 0, outSlope: 0 }, 
 const source = { bundle: "weapons", assetName: "testweapon", pathId: "42" };
 const mods = [
   { id: "Acme-Super_Rifles", name: "Super Rifles", version: "1.2.0", author: "Acme", files: [],
-    gameHooks: { classes: ["BallisticProjectile", "FVRViveHand"], unresolvedHarmonyPatches: false, ballistics: ["BallisticProjectile"] } },
-  { id: "Tools", name: "Tools", version: null, files: [], gameHooks: { classes: [], unresolvedHarmonyPatches: true, ballistics: [] } },
+    gameHooks: { methods: ["BallisticProjectile.UpdateVelocity", "FVRViveHand.Update"], unresolvedPatches: false, ballistics: ["BallisticProjectile.UpdateVelocity"] } },
+  { id: "Tools", name: "Tools", version: null, files: [], gameHooks: { methods: [], unresolvedPatches: true, ballistics: [] } },
 ];
 const round = (id, name, extra = {}) => ({
   id, name, caliberId: 13, roundClass: "FMJ", numProjectiles: 1, mass: 0.01, diameter: 0.01, muzzleVelocity: 800,
@@ -50,7 +50,7 @@ test("mod helpers label, describe and summarise modded entries", () => {
   assert.equal(modSummary({}), "");
   const summary = modSummary({ mods });
   assert.match(summary, /^2 installed mod packages read\./);
-  assert.match(summary, /Super Rifles 1\.2\.0 \(BallisticProjectile\)/);
+  assert.match(summary, /Super Rifles 1\.2\.0 \(BallisticProjectile\.UpdateVelocity\)/);
   assert.match(summary, /not determinable offline: Tools\./);
 });
 
@@ -85,7 +85,7 @@ test("modded entries are labelled, searchable and explained in the app", async (
   change("ammunition", "SuperRound");
   assert.match($("ammo-note").textContent, /From mod Super Rifles 1\.2\.0\./);
 
-  assert.match($("provenance").textContent, /2 installed mod packages read\. Patching ballistic game code \(not modeled\): Super Rifles 1\.2\.0 \(BallisticProjectile\)/);
+  assert.match($("provenance").textContent, /2 installed mod packages read\. Patching ballistic game code \(not modeled\): Super Rifles 1\.2\.0 \(BallisticProjectile\.UpdateVelocity\)/);
   assert.equal($("mod-issues-section").hidden, false);
   assert.equal($("mod-issues-summary").textContent, "2 mod items left out or limited — reasons");
   assert.deepEqual([...$("mod-issues").children].map((item) => item.textContent), [

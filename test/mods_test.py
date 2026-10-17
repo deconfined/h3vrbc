@@ -40,6 +40,10 @@ class MemberRefRow(SimpleNamespace):
     pass
 
 
+class MethodDefRow(SimpleNamespace):
+    pass
+
+
 def ref(row):
     return SimpleNamespace(row=row)
 
@@ -72,7 +76,7 @@ class Module:
         body = b"".join(instructions) + b"\x2a"  # ret
         rva = len(self.code)
         self.code += bytes([(len(body) << 2) | 0x2]) + body  # Tiny header.
-        return SimpleNamespace(Name=name, Rva=rva)
+        return MethodDefRow(Name=name, Rva=rva)
 
     def typedef(self, namespace, name, base, *methods):
         row = TypeDefRow(TypeNamespace=namespace, TypeName=name, Extends=ref(base),
@@ -360,25 +364,51 @@ class ScriptAssemblyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.scripts.add(Module("ModGuns"))
 
-    def test_hooks_are_found_from_monomod_types_harmony_attributes_and_manual_patches(self):
+    def test_hooks_name_the_patched_game_methods(self):
         harmony = TypeRefRow(TypeNamespace="HarmonyLib", TypeName="HarmonyPatch", ResolutionScope=ref(AssemblyRefRow(Name="0Harmony")))
         ctor = MemberRefRow(Name=".ctor", Class=ref(harmony))
-        blob = b"\x01\x00\x34FistVR.BallisticProjectile, Assembly-CSharp, Version=0.0.0.0\x04Fire\x00\x00"
-        module = Module("Patcher", typerefs=[TypeRefRow(TypeNamespace="On.FistVR", TypeName="AM")],
-                        attributes=[SimpleNamespace(Type=ref(ctor), Value=SimpleNamespace(value=blob))])
-        manual = TypeRefRow(TypeNamespace="HarmonyLib", TypeName="Harmony", ResolutionScope=ref(AssemblyRefRow(Name="0Harmony")))
-        module.member(manual, "Patch")
+
+        def attribute(parent, *strings):
+            blob = b"\x01\x00" + b"".join(bytes([len(text)]) + text for text in strings) + b"\x00\x00"
+            return SimpleNamespace(Type=ref(ctor), Parent=ref(parent), Value=SimpleNamespace(value=blob))
+        module = Module("Patcher", typerefs=[TypeRefRow(TypeNamespace="On.FistVR", TypeName="AM")])
+        module.member(TypeRefRow(TypeNamespace="On.FistVR", TypeName="FVRFireArm"), "add_Fire")
+        prefix = module.method("Prefix")
+        patches = module.typedef("Mod", "FlightPatches", game_type("Object", "System"), prefix)
+        handling = module.typedef("Mod", "HandlingPatches", game_type("Object", "System"), module.method("Postfix"))
+        module.net.mdtables.CustomAttribute = [
+            attribute(patches, b"FistVR.BallisticProjectile, Assembly-CSharp, Version=0.0.0.0"),
+            attribute(prefix, b"UpdateVelocity"),
+            attribute(handling, b"FistVR.FVRFireArmRound, Assembly-CSharp", b"UpdateInteraction"),
+        ]
+        module.member(TypeRefRow(TypeNamespace="HarmonyLib", TypeName="Harmony"), "Patch")
         self.scripts.add(module)
-        self.assertEqual(self.scripts.game_hooks("Patcher"), (["AM", "BallisticProjectile"], True))
+        self.assertEqual(self.scripts.game_hooks("Patcher"), ({
+            ("AM", None), ("FVRFireArm", "Fire"), ("BallisticProjectile", "UpdateVelocity"),
+            ("FVRFireArmRound", "UpdateInteraction")}, True))
         injector = Module("Assembly-CSharp.Wind.mm")
-        injector.typedef("FistVR", "patch_BallisticProjectile", game_type("BallisticProjectile"))
+        injector.typedef("FistVR", "patch_BallisticProjectile", game_type("BallisticProjectile"),
+                         injector.method("UpdateVelocity"), injector.method("orig_UpdateVelocity"), injector.method(".ctor"))
         injector.typedef("Plugin.src", "AutoBolt", game_type("FVRFireArm"))
+        detour = TypeRefRow(TypeNamespace="MonoMod.RuntimeDetour", TypeName="ILHook")
+        injector.member(detour, ".ctor")
         self.scripts.add(injector)
-        self.assertEqual(self.scripts.game_hooks("Assembly-CSharp.Wind.mm"), (["BallisticProjectile"], False))
+        self.assertEqual(self.scripts.game_hooks("Assembly-CSharp.Wind.mm"), ({("BallisticProjectile", "UpdateVelocity")}, True))
         self.assertEqual(self.scripts.injected(), {("Plugin.src", "AutoBolt"): "Assembly-CSharp.Wind.mm:Plugin.src.AutoBolt"})
         self.assertEqual(self.scripts.chain("Assembly-CSharp.Wind.mm:Plugin.src.AutoBolt"),
                          ["Assembly-CSharp.Wind.mm:Plugin.src.AutoBolt", "FVRFireArm", "FVRPhysicalObject"])
-        self.assertEqual(self.scripts.game_hooks("ModGuns"), ([], False))
+        self.assertEqual(self.scripts.game_hooks("ModGuns"), (set(), False))
+
+    def test_only_patches_of_modelled_methods_count_as_ballistic(self):
+        families = {**GAME_FAMILIES, "FVRFireArmRound": ["FVRFireArmRound"]}
+        self.assertTrue(extract.modelled("ClosedBoltWeapon", "Fire", families))
+        self.assertTrue(extract.modelled("ClosedBoltWeapon", None, families), "Unknown method: assume it matters")
+        self.assertFalse(extract.modelled("ClosedBoltWeapon", "UpdateInteraction", families))
+        self.assertTrue(extract.modelled("BallisticProjectile", "MoveBullet", families))
+        self.assertTrue(extract.modelled("Suppressor", "GetDriftMult", families))
+        self.assertFalse(extract.modelled("FVRFireArmRound", "UpdateInteraction", families))
+        self.assertFalse(extract.modelled("FVRFireArmRound", None, families), "Not on the modelled path at all")
+        self.assertFalse(extract.modelled("FVRSceneSettings", "Awake", families))
 
 
 class ModShotRuleTests(unittest.TestCase):

@@ -33,7 +33,7 @@ Prefabs that use any mod script are tagged with those classes (`modScripts`). Su
 
 ## Code patches
 
-Each mod assembly is checked for runtime patches of game classes: MonoMod hooks (`On.FistVR.*`, `IL.FistVR.*`), MonoMod patch classes (`FistVR.patch_*`, `[MonoModPatch]`) and Harmony `[HarmonyPatch]` attribute targets. Patches of classes that feed this model (projectiles, firearms, chambers, rounds, muzzle devices, optics, accuracy and ammunition data, scene settings) are listed in the dataset and in the app; their effects are **not** modeled. Direct `Harmony.Patch` calls choose their targets at runtime and are reported only as present.
+Each mod assembly is checked for the game methods it patches at runtime: MonoMod hook events (`On.FistVR.X.Method`, `IL.FistVR.X.Method`), MonoMod patch classes (`FistVR.patch_X`, through the methods they define) and Harmony `[HarmonyPatch]` class and method arguments. Every patched method is listed in the dataset (`gameHooks.methods`). Only patches of methods this model reproduces are flagged as ballistic, in the console and the app: any method of `BallisticProjectile`, `AM` and the ammunition and accuracy data; `FVRFireArm.Fire`, `Awake`, `UpdateCurrentMuzzle` and its fixed-drift methods (in any firearm class); the muzzle-device bias and mounting methods; and the optic zeroing methods traced in these docs. A patch whose method cannot be read is treated as ballistic when its class is on that path. Effects of flagged patches are **not** modeled. Direct `Harmony.Patch` calls and MonoMod `Hook`/`ILHook` objects choose their targets at runtime and are reported only as present.
 
 ## Limits
 

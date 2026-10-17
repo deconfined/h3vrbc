@@ -397,23 +397,48 @@ class ScriptAssemblies:
                    for ins in instructions)
 
     def game_hooks(self, name):
-        """Game classes assembly NAME patches at runtime, as far as is static.
+        """Game methods assembly NAME patches at runtime, as far as is static.
 
-        MonoMod hooks reference generated On.FistVR/IL.FistVR types. Harmony
-        attribute patches name their target type in the attribute blob. A
-        direct Harmony.Patch call has runtime-computed targets, so it is only
-        reported as present.
+        Returns (hooks, dynamic). HOOKS is a set of (class, method) pairs;
+        method is None when only the class is known. MonoMod HookGen hooks
+        subscribe to On.FistVR/IL.FistVR events named after the method;
+        MonoMod patch classes (FistVR.patch_X) replace the methods they
+        define; Harmony attributes name the class and method in their
+        arguments. A direct Harmony.Patch call or a MonoMod Hook/ILHook object
+        picks its target at runtime, so DYNAMIC only reports it is present.
         """
         tables = self.assemblies[name]["pe"].net.mdtables
-        hooked = set()
+        hooks, dynamic = set(), False
+        events = set()
+        for row in tables.MemberRef or []:
+            parent = _target(row.Class)
+            if _row_kind(parent) != "TypeRefRow":
+                continue
+            namespace, owner, member = str(parent.TypeNamespace), str(parent.TypeName), str(row.Name)
+            if namespace in ("On.FistVR", "IL.FistVR") and member.startswith(("add_", "remove_")):
+                hooks.add((owner, member.split("_", 1)[1]))
+                events.add(owner)
+            # PatchAll/CreateClassProcessor apply the attribute patches below.
+            elif (namespace, owner, member) == ("HarmonyLib", "Harmony", "Patch") or (
+                    namespace == "MonoMod.RuntimeDetour" and owner in ("Hook", "ILHook", "Detour", "NativeDetour") and member == ".ctor"):
+                dynamic = True
         for row in tables.TypeRef or []:
-            namespace = str(row.TypeNamespace)
-            if namespace in ("On.FistVR", "IL.FistVR"):
-                hooked.add(str(row.TypeName))
+            if str(row.TypeNamespace) in ("On.FistVR", "IL.FistVR") and str(row.TypeName) not in events:
+                hooks.add((str(row.TypeName), None))
+        owners = {}
         for row in tables.TypeDef or []:
-            # MonoMod patch modules rewrite FistVR.X through a class patch_X.
+            methods = [entry.row for entry in row.MethodList or []]
+            for entry in row.MethodList or []:
+                owners[id(entry.row)] = row
+                if getattr(entry, "row_index", None):
+                    owners[entry.row_index] = row
             if str(row.TypeNamespace) == "FistVR" and str(row.TypeName).startswith("patch_"):
-                hooked.add(str(row.TypeName)[len("patch_"):])
+                target = str(row.TypeName)[len("patch_"):]
+                replaced = {str(method.Name) for method in methods
+                            if not str(method.Name).startswith((".", "orig_"))}
+                hooks.update((target, method) for method in replaced or [None])
+        # Harmony: class-level attributes give defaults for method-level ones.
+        declared = {}
         for row in tables.CustomAttribute or []:
             ctor = _target(row.Type)
             parent = _target(ctor.Class) if _row_kind(ctor) == "MemberRefRow" else None
@@ -421,16 +446,42 @@ class ScriptAssemblies:
                     (str(parent.TypeNamespace) == "HarmonyLib" and str(parent.TypeName).startswith("HarmonyPatch"))
                     or str(parent.TypeName) == "MonoModPatch"):
                 continue
-            blob = getattr(row.Value, "value", b"") or b""
-            hooked.update(match.decode("ascii") for match in re.findall(rb"FistVR\.([A-Za-z_][A-Za-z0-9_]*)", blob))
-        dynamic = False
-        for row in tables.MemberRef or []:
-            parent = _target(row.Class)
-            # PatchAll/CreateClassProcessor apply the attribute patches above.
-            if (str(row.Name) == "Patch" and _row_kind(parent) == "TypeRefRow"
-                    and str(parent.TypeNamespace) == "HarmonyLib" and str(parent.TypeName) == "Harmony"):
-                dynamic = True
-        return sorted(hooked), dynamic
+            classes, names = _attribute_strings(getattr(row.Value, "value", b"") or b"")
+            target = _target(row.Parent)
+            if _row_kind(target) == "MethodDefRow":
+                owner = owners.get(id(target)) or owners.get(getattr(row.Parent, "row_index", None))
+                declared.setdefault(id(owner), [owner, (set(), set()), []])[2].append((classes, names))
+            else:
+                entry = declared.setdefault(id(target), [target, (set(), set()), []])
+                entry[1][0].update(classes)
+                entry[1][1].update(names)
+        for _, (classes, names), methods in declared.values():
+            for own_classes, own_names in methods or [(set(), set())]:
+                for owner in own_classes or classes:
+                    hooks.update((owner, method) for method in (own_names or names or [None]))
+        return hooks, dynamic
+
+
+def _attribute_strings(blob):
+    """Game classes and identifiers among a custom attribute's arguments.
+
+    String arguments are serialized as a length byte and the text; a Type
+    argument is its assembly-qualified name. Other arguments are skipped.
+    """
+    classes, names, index = set(), set(), 2  # After the 0x0001 prolog.
+    while index < len(blob):
+        size = blob[index]
+        text = blob[index + 1:index + 1 + size] if 0 < size < 0x80 else b""
+        if text and len(text) == size and all(32 <= byte < 127 for byte in text):
+            found = re.match(rb"FistVR\.([A-Za-z_][A-Za-z0-9_]*)", text)
+            if found:
+                classes.add(found[1].decode("ascii"))
+            elif re.fullmatch(rb"[A-Za-z_][A-Za-z0-9_]*", text):
+                names.add(text.decode("ascii"))
+            index += 1 + size
+        else:
+            index += 1
+    return classes, names
 
 
 # OtherLoader's registration rules (devyndamonster/OtherLoader 1.3.7,
